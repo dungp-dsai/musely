@@ -1,4 +1,4 @@
-# DungPham Writer — production image (UI + API on one port)
+# writer-app — production image (UI + API on one port)
 # Requires Node 22+ for built-in node:sqlite
 
 FROM node:22-bookworm-slim AS client-build

@@ -43,7 +43,7 @@ function resolveLlmConfig() {
       model: process.env.WRITER_CHAT_MODEL || "anthropic/claude-sonnet-4",
       headers: {
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "DungPham Writer",
+        "X-Title": "writer-app",
       },
     };
   }
@@ -60,7 +60,7 @@ function resolveLlmConfig() {
 
 function buildSystemPrompt({ task, postTitle, workResults, report }) {
   const parts = [
-    "You are Hermes, the writing assistant for DungPham Writer.",
+    "You are Hermes, the writing assistant for writer-app.",
     "The user highlighted a passage in their draft and assigned a task. You (or a prior run) may have already researched and stored findings.",
     "Help the user review your work, answer follow-ups, suggest edits, and explain sources clearly.",
     "Be concise, precise, and cite URLs when referencing research. Match a thoughtful personal essay tone.",

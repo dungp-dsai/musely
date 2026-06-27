@@ -1,8 +1,8 @@
 services:
   writer:
     build: .
-    image: dungpham-writer:latest
-    container_name: dungpham-writer
+    image: writer-app:latest
+    container_name: writer-app
     restart: unless-stopped
     ports:
       - "${WRITER_PORT:-8080}:8080"

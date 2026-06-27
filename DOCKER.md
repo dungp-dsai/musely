@@ -1,4 +1,4 @@
-# DungPham Writer — Docker & VPS Setup
+# writer-app — Docker & VPS Setup
 
 Run the Writer app as a single container: React UI + Express API + SQLite on **port 8080**.
 
@@ -123,13 +123,13 @@ Your posts stay in the `writer-data` volume across rebuilds.
 ## Build image only (no compose)
 
 ```bash
-docker build -t dungpham-writer:latest .
+docker build -t writer-app:latest .
 docker run -d \
-  --name dungpham-writer \
+  --name writer-app \
   -p 8080:8080 \
   -v writer-data:/app/data \
   -e OPENROUTER_API_KEY=sk-or-... \
-  dungpham-writer:latest
+  writer-app:latest
 ```
 
 ---
