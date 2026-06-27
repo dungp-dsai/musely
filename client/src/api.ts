@@ -87,4 +87,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
     }).then(json),
+
+  getConfig: (): Promise<{ hermesChatEnabled: boolean }> => fetch("/api/config").then(json),
+
+  getHermesModels: (): Promise<{ models: string[]; error: string | null }> =>
+    fetch("/api/hermes/models").then(json),
 };

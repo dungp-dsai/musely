@@ -1,38 +1,7 @@
 // Lightweight LLM helper for task follow-up chat in the Writer UI.
 // Reads API keys from ~/.hermes/.env (OPENROUTER_API_KEY or OPENAI_API_KEY).
 
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-
-let envLoaded = false;
-
-function loadHermesEnv() {
-  if (envLoaded) return;
-  envLoaded = true;
-  const candidates = [
-    process.env.HERMES_HOME ? join(process.env.HERMES_HOME, ".env") : null,
-    join(homedir(), ".hermes", ".env"),
-  ].filter(Boolean);
-
-  for (const path of candidates) {
-    if (!existsSync(path)) continue;
-    const text = readFileSync(path, "utf8");
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq === -1) continue;
-      const key = trimmed.slice(0, eq).trim();
-      let val = trimmed.slice(eq + 1).trim();
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1);
-      }
-      if (!process.env[key]) process.env[key] = val;
-    }
-    break;
-  }
-}
+import { loadHermesEnv } from "./hermes-env.js";
 
 function resolveLlmConfig() {
   loadHermesEnv();

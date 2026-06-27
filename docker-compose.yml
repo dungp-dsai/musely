@@ -1,4 +1,47 @@
+# writer-app + Hermes Agent — one compose file
+#
+# First time (Hermes setup wizard — writes API keys to ./hermes-data/.env):
+#   mkdir -p hermes-data
+#   cp .env.docker.example .env
+#   docker compose run --rm hermes-agent setup
+#   docker compose up -d --build
+#
+# Then open http://localhost:8080 → sidebar "Chat with Hermes"
+#
+# Docs: https://hermes-agent.nousresearch.com/docs/user-guide/docker
+
 services:
+  hermes-agent:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes-agent
+    restart: unless-stopped
+    command: gateway run
+    ports:
+      - "${HERMES_API_PORT:-8642}:8642"
+    volumes:
+      # Hermes state: config, .env, sessions, skills — maps to ~/.hermes on the host in docs
+      - ./hermes-data:/opt/data
+      # Shared writer SQLite + agent-cli for AGENT_GUIDE.md collaboration
+      - writer-data:/app/data
+      - ./server:/app/server:ro
+      - ./AGENT_GUIDE.md:/app/AGENT_GUIDE.md:ro
+    environment:
+      # API server — required for built-in Hermes chat (see Hermes Docker docs)
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-change-me-min-8-chars}
+      API_SERVER_MODEL_NAME: ${HERMES_API_MODEL_NAME:-Hermes Agent}
+      HERMES_WRITER_DB: /app/data/hermes_writer.db
+    shm_size: "1g"
+    deploy:
+      resources:
+        limits:
+          memory: ${HERMES_MEMORY_LIMIT:-4G}
+          cpus: "${HERMES_CPU_LIMIT:-2.0}"
+    networks:
+      - writer-net
+
   writer:
     build: .
     image: writer-app:latest
@@ -11,12 +54,35 @@ services:
       HOST: 0.0.0.0
       HERMES_WRITER_DB: /app/data/hermes_writer.db
       STATIC_DIR: /app/client/dist
-      # Task chat in the UI (pick one provider)
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       WRITER_CHAT_MODEL: ${WRITER_CHAT_MODEL:-anthropic/claude-sonnet-4}
+      HERMES_API_BASE_URL: http://hermes-agent:8642/v1
+      HERMES_API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-change-me-min-8-chars}
+      HERMES_CHAT_MODEL: ${HERMES_CHAT_MODEL:-}
     volumes:
       - writer-data:/app/data
+    depends_on:
+      hermes-agent:
+        condition: service_started
+    networks:
+      - writer-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  writer-net:
+    driver: bridge
 
 volumes:
   writer-data:

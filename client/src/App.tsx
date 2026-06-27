@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
+import HermesChat from "./components/HermesChat";
 import { api } from "./api";
 import type { Post, PostSummary, PostStatus } from "./types";
 
+type View = "writer" | "chat";
+
 export default function App() {
+  const [view, setView] = useState<View>("writer");
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [post, setPost] = useState<Post | null>(null);
@@ -39,12 +43,13 @@ export default function App() {
 
   // Poll so changes made by the Hermes agent show up live.
   useEffect(() => {
+    if (view !== "writer") return;
     const t = setInterval(() => {
       loadPosts();
       if (selectedId != null) loadPost(selectedId);
     }, 4000);
     return () => clearInterval(t);
-  }, [loadPosts, loadPost, selectedId]);
+  }, [loadPosts, loadPost, selectedId, view]);
 
   const refresh = useCallback(async () => {
     await loadPosts();
@@ -74,27 +79,39 @@ export default function App() {
   };
 
   return (
-    <div className="app">
-      <Sidebar
-        posts={posts}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        onCreate={create}
-        onStatusChange={changeStatus}
-      />
-      <main className="main">
-        {error && <div className="error-bar" onClick={() => setError(null)}>{error}</div>}
-        {post ? (
-          <PostView post={post} onChanged={refresh} onDeleted={handleDeleted} />
+    <div className={`app ${view === "chat" ? "app-chat" : ""}`}>
+      {view === "writer" && (
+        <Sidebar
+          posts={posts}
+          selectedId={selectedId}
+          onSelect={(id) => {
+            setView("writer");
+            setSelectedId(id);
+          }}
+          onCreate={create}
+          onStatusChange={changeStatus}
+          onOpenChat={() => setView("chat")}
+        />
+      )}
+      <main className={`main ${view === "chat" ? "main-chat" : ""}`}>
+        {view === "chat" ? (
+          <HermesChat onBack={() => setView("writer")} />
         ) : (
-          <div className="placeholder">
-            <div className="placeholder-mark">H</div>
-            <h2>Start writing with Hermes</h2>
-            <p>
-              Create a new piece, drop your idea and thoughts, then leave instructions for the AI.
-              Every round of feedback produces a new tracked version.
-            </p>
-          </div>
+          <>
+            {error && <div className="error-bar" onClick={() => setError(null)}>{error}</div>}
+            {post ? (
+              <PostView post={post} onChanged={refresh} onDeleted={handleDeleted} />
+            ) : (
+              <div className="placeholder">
+                <div className="placeholder-mark">H</div>
+                <h2>Start writing with Hermes</h2>
+                <p>
+                  Create a new piece, drop your idea and thoughts, then leave instructions for the AI.
+                  Every round of feedback produces a new tracked version.
+                </p>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

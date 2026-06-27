@@ -1,0 +1,14 @@
+# Optional local override — use existing ~/.hermes instead of ./hermes-data
+#
+# Copy to docker-compose.override.yml (gitignored):
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+# Then: docker compose up -d
+
+services:
+  hermes-agent:
+    volumes:
+      - ${HOME}/.hermes:/opt/data
+      - writer-data:/app/data
+      - ./server:/app/server:ro
+      - ./AGENT_GUIDE.md:/app/AGENT_GUIDE.md:ro

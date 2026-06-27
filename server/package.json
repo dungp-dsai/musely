@@ -5,8 +5,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "node --no-warnings=ExperimentalWarning index.js",
-    "start": "node --no-warnings=ExperimentalWarning index.js"
+    "dev": "node --no-warnings=ExperimentalWarning --env-file-if-exists=../.env index.js",
+    "start": "node --no-warnings=ExperimentalWarning --env-file-if-exists=../.env index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

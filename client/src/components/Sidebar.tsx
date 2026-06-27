@@ -8,13 +8,14 @@ interface Props {
   onSelect: (id: number) => void;
   onCreate: (data: { title: string; idea: string }) => void;
   onStatusChange: (id: number, status: PostStatus) => void;
+  onOpenChat: () => void;
 }
 
 function normalizeStatus(status: string): PostStatus {
   return status === "in_progress" ? "in_progress" : "pending";
 }
 
-export default function Sidebar({ posts, selectedId, onSelect, onCreate, onStatusChange }: Props) {
+export default function Sidebar({ posts, selectedId, onSelect, onCreate, onStatusChange, onOpenChat }: Props) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
 
@@ -42,6 +43,10 @@ export default function Sidebar({ posts, selectedId, onSelect, onCreate, onStatu
           <div className="brand-sub">from draft to perfect</div>
         </div>
       </div>
+
+      <button type="button" className="hermes-chat-link" onClick={onOpenChat}>
+        Chat with Hermes
+      </button>
 
       <button className="btn btn-primary new-btn" onClick={() => setOpen((v) => !v)}>
         {open ? "Cancel" : "+ New piece"}

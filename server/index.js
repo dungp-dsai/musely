@@ -31,6 +31,11 @@ import {
   addAiJobReport,
   listAiJobReports,
 } from "./agent-api.js";
+import {
+  hermesChatConfigured,
+  listHermesModels,
+  streamHermesChat,
+} from "./hermes-chat.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -55,6 +60,49 @@ const asJson = (res, fn) => {
 };
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, db: DB_PATH }));
+
+app.get("/api/config", (_req, res) => {
+  res.json({ hermesChatEnabled: hermesChatConfigured() });
+});
+
+app.get("/api/hermes/models", async (_req, res) => {
+  try {
+    res.json(await listHermesModels());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ models: [], error: err.message });
+  }
+});
+
+app.post("/api/hermes/chat", async (req, res) => {
+  const controller = new AbortController();
+  // Only abort when the client actually disconnects — NOT req "close" (fires after body is read).
+  const abortUpstream = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abortUpstream);
+  res.on("close", abortUpstream);
+
+  try {
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : null;
+    if (!messages?.length) {
+      return res.status(400).json({ error: "messages array is required" });
+    }
+    await streamHermesChat({
+      messages,
+      model: typeof req.body?.model === "string" ? req.body.model : undefined,
+      res,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    req.off("aborted", abortUpstream);
+    res.off("close", abortUpstream);
+  }
+});
 
 // Posts
 app.get("/api/posts", (_req, res) => asJson(res, () => listPosts()));
