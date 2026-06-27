@@ -1,0 +1,22 @@
+services:
+  writer:
+    build: .
+    image: dungpham-writer:latest
+    container_name: dungpham-writer
+    restart: unless-stopped
+    ports:
+      - "${WRITER_PORT:-8080}:8080"
+    environment:
+      PORT: 8080
+      HOST: 0.0.0.0
+      HERMES_WRITER_DB: /app/data/hermes_writer.db
+      STATIC_DIR: /app/client/dist
+      # Task chat in the UI (pick one provider)
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      WRITER_CHAT_MODEL: ${WRITER_CHAT_MODEL:-anthropic/claude-sonnet-4}
+    volumes:
+      - writer-data:/app/data
+
+volumes:
+  writer-data:

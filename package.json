@@ -1,0 +1,18 @@
+{
+  "name": "hermes-writer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A clean writing workspace where you drop ideas and the Hermes AI agent turns them into versioned drafts.",
+  "scripts": {
+    "dev": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "install:all": "npm install && npm --prefix server install && npm --prefix client install",
+    "agent": "node --no-warnings=ExperimentalWarning server/agent-cli.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
