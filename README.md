@@ -47,16 +47,19 @@ To run separately: `npm run dev:server` and `npm run dev:client`.
 
 ### Local test with Hermes chat
 
-**Option A — Docker (postgres + api + web + Hermes, recommended for VPS)**
+**Option A — Docker (postgres + api + web + per-user Hermes, recommended for VPS)**
 
 ```bash
 cd writer-app
 cp .env.docker.example .env   # SESSION_SECRET, Google OAuth, HERMES_API_SERVER_KEY
-mkdir -p hermes-data
-docker compose run --rm hermes-agent setup
+mkdir -p hermes-base
+docker compose run --rm hermes-base-setup setup   # one-time Hermes template
 docker compose up -d --build
 # http://localhost:8080 — sign in with Google
 ```
+
+Each user gets an isolated Hermes container, provisioned on demand from the
+shared `./hermes-base` template and stopped after idle.
 
 See **DOCKER.md** for full details.
 

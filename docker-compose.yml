@@ -1,4 +1,4 @@
-# writer-app + PostgreSQL + Hermes Agent
+# writer-app + PostgreSQL + per-user Hermes orchestrator
 #
 # First time:
 #   cp .env.docker.example .env
@@ -6,8 +6,14 @@
 #   # Set SESSION_SECRET (openssl rand -hex 32)
 #   # Set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET (Google Cloud Console)
 #
-#   mkdir -p hermes-data
-#   docker compose run --rm hermes-agent setup
+#   # 1. Build the shared Hermes base template (one-time LLM setup wizard).
+#   #    Its /opt/data is persisted to ./hermes-base and cloned into each
+#   #    user's volume by the orchestrator.
+#   mkdir -p hermes-base
+#   docker compose run --rm hermes-base-setup setup
+#
+#   # 2. Start the stack (postgres + api + web). Per-user Hermes containers
+#   #    (hermes-user-<id>) are created on demand by the api orchestrator.
 #   docker compose up -d --build
 #
 # Open http://localhost:8080 → sign in with Google
@@ -51,16 +57,27 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       WRITER_CHAT_MODEL: ${WRITER_CHAT_MODEL:-anthropic/claude-sonnet-4}
-      HERMES_API_BASE_URL: http://hermes-agent:8642/v1
-      HERMES_API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-change-me-use-openssl-rand-hex-32}
       HERMES_CHAT_MODEL: ${HERMES_CHAT_MODEL:-}
+      HERMES_API_MODEL_NAME: ${HERMES_API_MODEL_NAME:-Hermes Agent}
       AGENT_API_KEY: ${AGENT_API_KEY:-}
-      AGENT_USER_ID: ${AGENT_USER_ID:-}
+      # ---- Per-user Hermes orchestrator ----
+      HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+      HERMES_NETWORK: writer-net
+      HERMES_BASE_DIR: /opt/hermes-base
+      HERMES_DATA_DIR: /opt/hermes-data
+      HERMES_IDLE_MINUTES: ${HERMES_IDLE_MINUTES:-15}
+      HERMES_USER_MEMORY: ${HERMES_USER_MEMORY:-4g}
+      HERMES_USER_CPUS: ${HERMES_USER_CPUS:-2.0}
+    volumes:
+      # Shared base template (read-only) cloned into each user volume on provision
+      - ./hermes-base:/opt/hermes-base:ro
+      # Configured Hermes home (incl. .env with LLM keys) — preferred seed source
+      - ./hermes-data:/opt/hermes-data:ro
+      # Docker socket: orchestrator creates/starts/stops per-user containers
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
-      hermes-agent:
-        condition: service_started
     networks:
       - writer-net
     healthcheck:
@@ -91,40 +108,28 @@ services:
     networks:
       - writer-net
 
-  hermes-agent:
-    image: nousresearch/hermes-agent:latest
-    container_name: hermes-agent
-    restart: unless-stopped
-    command: gateway run
-    ports:
-      - "${HERMES_API_PORT:-8642}:8642"
+  # Template/setup helper only — NOT in the request path and NOT started by
+  # `docker compose up` (guarded by the "setup" profile). Run the one-time
+  # Hermes LLM setup wizard against the shared base template:
+  #   docker compose run --rm hermes-base-setup setup
+  hermes-base-setup:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    profiles: ["setup"]
     volumes:
-      - ./hermes-data:/opt/data
-      - ./server:/app/server:ro
-      - ./AGENT_GUIDE.md:/app/AGENT_GUIDE.md:ro
+      - ./hermes-base:/opt/data
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
-      API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-change-me-use-openssl-rand-hex-32}
+      API_SERVER_KEY: ${f:-change-me-use-openssl-rand-hex-32}
       API_SERVER_MODEL_NAME: ${HERMES_API_MODEL_NAME:-Hermes Agent}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-writer}:${POSTGRES_PASSWORD:-writer}@postgres:5432/${POSTGRES_DB:-writer}
-      AGENT_API_KEY: ${AGENT_API_KEY:-}
-      AGENT_USER_ID: ${AGENT_USER_ID:-}
     shm_size: "1g"
-    deploy:
-      resources:
-        limits:
-          memory: ${HERMES_MEMORY_LIMIT:-4G}
-          cpus: "${HERMES_CPU_LIMIT:-2.0}"
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - writer-net
 
 networks:
   writer-net:
+    name: writer-net
     driver: bridge
 
 volumes:

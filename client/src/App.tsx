@@ -2,15 +2,19 @@ import { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
 import HermesChat from "./components/HermesChat";
+import CronSettings from "./pages/CronSettings";
 import LoginPage from "./pages/LoginPage";
+import HermesBootScreen from "./components/HermesBootScreen";
 import { useAuth } from "./auth/AuthContext";
+import { useHermesBoot } from "./hooks/useHermesBoot";
 import { api } from "./api";
 import type { Post, PostSummary, PostStatus } from "./types";
 
-type View = "writer" | "chat";
+type View = "writer" | "chat" | "settings";
 
 export default function App() {
   const { user, loading, logout } = useAuth();
+  const { phase: hermesPhase, error: hermesError, retry: retryHermes } = useHermesBoot(user);
   const [view, setView] = useState<View>("writer");
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -117,8 +121,18 @@ export default function App() {
     );
   }
 
+  if (hermesPhase !== "ready") {
+    return (
+      <HermesBootScreen
+        user={user}
+        error={hermesPhase === "error" ? hermesError : null}
+        onRetry={hermesPhase === "error" ? retryHermes : undefined}
+      />
+    );
+  }
+
   return (
-    <div className={`app ${view === "chat" ? "app-chat" : ""}`}>
+    <div className={`app ${view === "chat" || view === "settings" ? "app-chat" : ""}`}>
       {view === "writer" && (
         <Sidebar
           posts={posts}
@@ -131,12 +145,15 @@ export default function App() {
           onCreate={create}
           onStatusChange={changeStatus}
           onOpenChat={() => setView("chat")}
+          onOpenSettings={() => setView("settings")}
           onLogout={logout}
         />
       )}
-      <main className={`main ${view === "chat" ? "main-chat" : ""}`}>
+      <main className={`main ${view === "chat" || view === "settings" ? "main-chat" : ""}`}>
         {view === "chat" ? (
-          <HermesChat onBack={() => setView("writer")} />
+          <HermesChat userId={user.id} onBack={() => setView("writer")} />
+        ) : view === "settings" ? (
+          <CronSettings onBack={() => setView("writer")} />
         ) : (
           <>
             {error && (

@@ -11,6 +11,7 @@ interface Props {
   onCreate: (data: { title: string; idea: string }) => void;
   onStatusChange: (id: number, status: PostStatus) => void;
   onOpenChat: () => void;
+  onOpenSettings: () => void;
   onLogout: () => void;
 }
 
@@ -26,6 +27,7 @@ export default function Sidebar({
   onCreate,
   onStatusChange,
   onOpenChat,
+  onOpenSettings,
   onLogout,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -61,6 +63,10 @@ export default function Sidebar({
 
       <button type="button" className="hermes-chat-link" onClick={onOpenChat}>
         Chat with Hermes
+      </button>
+
+      <button type="button" className="settings-link" onClick={onOpenSettings}>
+        Scheduled tasks
       </button>
 
       <button className="btn btn-primary new-btn" onClick={() => setOpen((v) => !v)}>

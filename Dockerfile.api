@@ -11,6 +11,11 @@ ENV NODE_ENV=production \
     PORT=8081 \
     HOST=0.0.0.0
 
+# docker CLI for `docker exec hermes-agent hermes cron …`
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=deps /build/server/node_modules ./node_modules
 COPY server/ ./
 

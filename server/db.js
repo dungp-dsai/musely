@@ -60,6 +60,68 @@ export async function getUserById(id) {
   return rows[0] || null;
 }
 
+// ---------- Hermes instances (orchestrator registry) ----------
+
+export async function getInstance(userId) {
+  const { rows } = await pool.query(`SELECT * FROM hermes_instances WHERE user_id = $1`, [userId]);
+  return rows[0] || null;
+}
+
+export async function createInstanceRecord({ userId, containerName, apiKey }) {
+  const existing = await getInstance(userId);
+  if (existing) return existing;
+  const { rows } = await pool.query(
+    `INSERT INTO hermes_instances (user_id, container_name, api_key, status, last_active_at)
+     VALUES ($1, $2, $3, 'stopped', NOW())
+     ON CONFLICT (user_id) DO NOTHING
+     RETURNING *`,
+    [userId, containerName, apiKey]
+  );
+  return rows[0] || (await getInstance(userId));
+}
+
+export async function updateInstanceContainerName(userId, containerName) {
+  const { rows } = await pool.query(
+    `UPDATE hermes_instances SET container_name = $1 WHERE user_id = $2 RETURNING *`,
+    [containerName, userId]
+  );
+  return rows[0] || null;
+}
+
+export async function setInstanceStatus(userId, status) {
+  const { rows } = await pool.query(
+    `UPDATE hermes_instances SET status = $1 WHERE user_id = $2 RETURNING *`,
+    [status, userId]
+  );
+  return rows[0] || null;
+}
+
+export async function touchInstance(userId) {
+  await pool.query(
+    `UPDATE hermes_instances SET last_active_at = NOW(), status = 'running' WHERE user_id = $1`,
+    [userId]
+  );
+}
+
+export async function listInstances() {
+  const { rows } = await pool.query(
+    `SELECT hi.*, u.email, u.name
+     FROM hermes_instances hi
+     JOIN users u ON u.id = hi.user_id
+     ORDER BY hi.last_active_at DESC`
+  );
+  return rows;
+}
+
+export async function listIdleInstances(idleMinutes) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hermes_instances
+     WHERE status = 'running' AND last_active_at < NOW() - ($1 || ' minutes')::interval`,
+    [String(idleMinutes)]
+  );
+  return rows;
+}
+
 // ---------- Posts ----------
 
 export async function listPosts(userId) {

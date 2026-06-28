@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS ai_task_chat (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Per-user Hermes agent instance registry (orchestrator)
+CREATE TABLE IF NOT EXISTS hermes_instances (
+  user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  container_name  TEXT NOT NULL UNIQUE,
+  api_key         TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'stopped',
+  last_active_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id);
 CREATE INDEX IF NOT EXISTS idx_versions_post ON versions(post_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_post ON feedback(post_id);
@@ -76,3 +86,4 @@ CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
 CREATE INDEX IF NOT EXISTS idx_ai_task_work_task ON ai_task_work(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_job_reports_post ON ai_job_reports(post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_task_chat_task ON ai_task_chat(task_id);
+CREATE INDEX IF NOT EXISTS idx_hermes_instances_active ON hermes_instances(last_active_at);

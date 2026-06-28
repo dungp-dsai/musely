@@ -7,11 +7,15 @@ export type Conversation = {
   updatedAt: number;
 };
 
-const KEY = "writer-app-hermes-chats";
+const LEGACY_KEY = "writer-app-hermes-chats";
 
-export function loadConversations(): Conversation[] {
+function storageKey(userId: number) {
+  return `writer-app-hermes-chats-u${userId}`;
+}
+
+export function loadConversations(userId: number): Conversation[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(storageKey(userId));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Conversation[];
     return Array.isArray(parsed) ? parsed.sort((a, b) => b.updatedAt - a.updatedAt) : [];
@@ -20,8 +24,17 @@ export function loadConversations(): Conversation[] {
   }
 }
 
-export function saveConversations(list: Conversation[]) {
-  localStorage.setItem(KEY, JSON.stringify(list.slice(0, 50)));
+export function saveConversations(userId: number, list: Conversation[]) {
+  localStorage.setItem(storageKey(userId), JSON.stringify(list.slice(0, 50)));
+}
+
+/** Drop legacy shared key so older builds don't leak chats across users. */
+export function clearLegacySharedChats() {
+  try {
+    localStorage.removeItem(LEGACY_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function newConversation(): Conversation {

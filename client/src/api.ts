@@ -1,4 +1,5 @@
 import type { Post, PostSummary, Version, Feedback, TaskThread, AiTaskChatMessage } from "./types";
+import type { CronJob } from "./lib/cronTypes";
 
 export type User = {
   id: number;
@@ -112,11 +113,81 @@ export const api = {
       body: JSON.stringify({ message }),
     }).then(json),
 
-  getConfig: (): Promise<{ hermesChatEnabled: boolean; googleAuthEnabled: boolean }> =>
-    apiFetch("/api/config").then(json),
+  getConfig: (): Promise<{
+    hermesChatEnabled: boolean;
+    hermesCronEnabled: boolean;
+    googleAuthEnabled: boolean;
+    orchestratorEnabled: boolean;
+  }> => apiFetch("/api/config").then(json),
 
-  getHermesModels: (): Promise<{ models: string[]; error: string | null }> =>
-    apiFetch("/api/hermes/models").then(json),
+  getHermesModels: (): Promise<{
+    models: string[];
+    defaultModel?: string | null;
+    gatewayModel?: string;
+    error: string | null;
+  }> => apiFetch("/api/hermes/models").then(json),
+
+  getCronMeta: (): Promise<{
+    enabled: boolean;
+    deliveryOptions: { value: string; label: string }[];
+    scheduleExamples: string[];
+  }> => apiFetch("/api/hermes/cron/meta").then(json),
+
+  listCronJobs: (): Promise<{ jobs: CronJob[]; source?: string; raw?: string }> =>
+    apiFetch("/api/hermes/cron").then(json),
+
+  getCronStatus: (): Promise<{ status: string }> => apiFetch("/api/hermes/cron/status").then(json),
+
+  getInstanceStatus: (): Promise<{
+    orchestrator: boolean;
+    state?: string;
+    settings?: { idleMinutes: number; memory: string; cpus: string };
+  }> => apiFetch("/api/hermes/instance").then(json),
+
+  ensureHermesInstance: (): Promise<{
+    ready: boolean;
+    state?: string;
+    orchestrator?: boolean;
+    containerName?: string;
+    error?: string;
+  }> =>
+    apiFetch("/api/hermes/instance/ensure", { method: "POST" }).then(async (res) => {
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 202) return { ...body, ready: false };
+      if (!res.ok) {
+        return { ready: false, error: body.error || `Request failed: ${res.status}` };
+      }
+      return body;
+    }),
+
+  createCronJob: (data: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> =>
+    apiFetch("/api/hermes/cron", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).then(json),
+
+  updateCronJob: (
+    id: string,
+    data: Record<string, unknown>
+  ): Promise<{ ok: boolean; message?: string }> =>
+    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).then(json),
+
+  pauseCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
+    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}/pause`, { method: "POST" }).then(json),
+
+  resumeCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
+    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}/resume`, { method: "POST" }).then(json),
+
+  runCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
+    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}/run`, { method: "POST" }).then(json),
+
+  deleteCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
+    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}`, { method: "DELETE" }).then(json),
 };
 
 export { API_BASE };

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, API_BASE } from "../api";
 import { renderChatMarkdown } from "../lib/chatMarkdown";
 import {
+  clearLegacySharedChats,
   loadConversations,
   newConversation,
   saveConversations,
@@ -12,6 +13,7 @@ import {
 import { parseOpenAIStream } from "../lib/hermesStream";
 
 interface Props {
+  userId: number;
   onBack: () => void;
 }
 
@@ -25,17 +27,19 @@ function isToolStatusLine(text: string) {
   return /^[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/u.test(text.trim()) && text.length < 120;
 }
 
-export default function HermesChat({ onBack }: Props) {
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
-  const [activeId, setActiveId] = useState<string>(() => loadConversations()[0]?.id ?? newConversation().id);
+export default function HermesChat({ userId, onBack }: Props) {
+
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [configuredModel, setConfiguredModel] = useState<string | null>(null);
   const [model, setModel] = useState<string>("");
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [statusLine, setStatusLine] = useState<string | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -44,11 +48,14 @@ export default function HermesChat({ onBack }: Props) {
     conversations[0] ??
     newConversation();
 
-  const persist = useCallback((list: Conversation[], nextActive?: string) => {
-    saveConversations(list);
-    setConversations(list);
-    if (nextActive) setActiveId(nextActive);
-  }, []);
+  const persist = useCallback(
+    (list: Conversation[], nextActive?: string) => {
+      saveConversations(userId, list);
+      setConversations(list);
+      if (nextActive) setActiveId(nextActive);
+    },
+    [userId]
+  );
 
   const updateActive = useCallback(
     (updater: (c: Conversation) => Conversation) => {
@@ -60,25 +67,51 @@ export default function HermesChat({ onBack }: Props) {
           idx >= 0
             ? prev.map((c, i) => (i === idx ? updated : c))
             : [updated, ...prev.filter((c) => c.id !== updated.id)];
-        saveConversations(list);
+        saveConversations(userId, list);
         return list.sort((a, b) => b.updatedAt - a.updatedAt);
       });
     },
-    [active]
+    [active, userId]
   );
 
   useEffect(() => {
-    api.getHermesModels().then(({ models: m, error: err }) => {
+    clearLegacySharedChats();
+    abortRef.current?.abort();
+    setStreaming(false);
+    setStatusLine(null);
+    setError(null);
+    setInput("");
+
+    const list = loadConversations(userId);
+    if (list.length) {
+      setConversations(list);
+      setActiveId(list[0].id);
+    } else {
+      const c = newConversation();
+      setConversations([c]);
+      setActiveId(c.id);
+      saveConversations(userId, [c]);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    api.getHermesModels().then(({ models: m, defaultModel, error: err }) => {
       if (err) setError(err);
       else {
         setModels(m);
+        setConfiguredModel(defaultModel ?? null);
         if (m.length) setModel(m[0]);
       }
     });
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messagesRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
   }, [active.messages, streaming, statusLine]);
 
   useEffect(() => {
@@ -89,6 +122,7 @@ export default function HermesChat({ onBack }: Props) {
   }, [input]);
 
   useEffect(() => {
+    if (!activeId) return;
     if (!conversations.some((c) => c.id === activeId)) {
       const fresh = newConversation();
       persist([fresh, ...conversations], fresh.id);
@@ -128,19 +162,39 @@ export default function HermesChat({ onBack }: Props) {
       abortRef.current = controller;
 
       try {
-        const res = await fetch(`${API_BASE}/api/hermes/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          signal: controller.signal,
-          body: JSON.stringify({ messages: history, model }),
-        });
+        // The API may return 202 while the user's Hermes instance is starting
+        // (on-demand orchestration). Show a warming state and retry the request.
+        let res: Response;
+        let warmAttempts = 0;
+        const MAX_WARM_ATTEMPTS = 40; // ~2 min at 3s
+        for (;;) {
+          res = await fetch(`${API_BASE}/api/hermes/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            signal: controller.signal,
+            body: JSON.stringify({ messages: history }),
+          });
+
+          if (res.status === 202) {
+            warmAttempts += 1;
+            if (warmAttempts > MAX_WARM_ATTEMPTS) {
+              throw new Error("Your Hermes instance is taking too long to start. Try again.");
+            }
+            setStatusLine("Starting your Hermes instance… (first use can take ~30s)");
+            await new Promise((r) => setTimeout(r, 3000));
+            if (controller.signal.aborted) return;
+            continue;
+          }
+          break;
+        }
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || `Request failed: ${res.status}`);
         }
 
+        setStatusLine(null);
         if (!res.body) throw new Error("No response stream");
 
         let assistantText = "";
@@ -164,6 +218,10 @@ export default function HermesChat({ onBack }: Props) {
             return { ...c, messages: msgs, updatedAt: Date.now() };
           });
         }
+
+        if (!assistantText.trim()) {
+          throw new Error("Hermes returned an empty response. Check that LLM API keys are configured.");
+        }
       } catch (e) {
         const err = e as Error;
         if (err.name === "AbortError" || /aborted/i.test(err.message)) return;
@@ -181,7 +239,7 @@ export default function HermesChat({ onBack }: Props) {
         textareaRef.current?.focus();
       }
     },
-    [active.messages, active.title, input, model, streaming, updateActive]
+    [active.messages, active.title, input, streaming, updateActive]
   );
 
   const startNewChat = () => {
@@ -244,7 +302,7 @@ export default function HermesChat({ onBack }: Props) {
       <div className="hc-main">
         <header className="hc-topbar">
           <div className="hc-topbar-title">Hermes</div>
-          {models.length > 0 && (
+          {models.length > 1 ? (
             <select
               className="hc-model-select"
               value={model}
@@ -257,10 +315,16 @@ export default function HermesChat({ onBack }: Props) {
                 </option>
               ))}
             </select>
+          ) : (
+            configuredModel && (
+              <span className="hc-model-label" title="LLM from your Hermes config">
+                {configuredModel}
+              </span>
+            )
           )}
         </header>
 
-        <div className="hc-messages">
+        <div className="hc-messages" ref={messagesRef}>
           {active.messages.length === 0 ? (
             <div className="hc-empty">
               <div className="hc-empty-mark">H</div>
@@ -297,7 +361,6 @@ export default function HermesChat({ onBack }: Props) {
               {statusLine}
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
         {error && <div className="hc-error">{error}</div>}

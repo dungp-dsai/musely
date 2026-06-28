@@ -34,6 +34,28 @@ import {
   streamHermesChat,
 } from "./hermes-chat.js";
 import {
+  hermesCronConfigured,
+  listCronJobsFor,
+  cronSchedulerStatusFor,
+  createCronJobFor,
+  editCronJobFor,
+  pauseCronJobFor,
+  resumeCronJobFor,
+  runCronJobFor,
+  removeCronJobFor,
+  CRON_DELIVERY_OPTIONS,
+  CRON_SCHEDULE_EXAMPLES,
+} from "./hermes-cron.js";
+import {
+  orchestratorConfigured,
+  ensureInstance,
+  quickState,
+  templateConfigured,
+  startIdleReaper,
+  ORCHESTRATOR_SETTINGS,
+} from "./hermes-orchestrator.js";
+import { listInstances, getInstance } from "./db.js";
+import {
   googleAuthUrl,
   exchangeGoogleCode,
   setSessionCookie,
@@ -74,8 +96,10 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, db: "postgresql" }));
 
 app.get("/api/config", (_req, res) => {
   res.json({
-    hermesChatEnabled: hermesChatConfigured(),
+    hermesChatEnabled: hermesChatConfigured() || orchestratorConfigured(),
+    hermesCronEnabled: hermesCronConfigured(),
     googleAuthEnabled: Boolean(process.env.GOOGLE_CLIENT_ID),
+    orchestratorEnabled: orchestratorConfigured(),
   });
 });
 
@@ -125,8 +149,33 @@ app.post("/api/auth/logout", (_req, res) => {
 
 // ---------- Hermes chat (authenticated) ----------
 
-app.get("/api/hermes/models", requireUser, async (_req, res) => {
+// Resolve the per-user Hermes target. Returns null + 202 semantics handled by caller.
+async function resolveChatTarget(req, res) {
+  if (!orchestratorConfigured()) return { target: undefined };
+  const state = await quickState(req.user.id);
+  if (state !== "running") {
+    // kick off start in the background (coalesced) and tell the client to retry
+    ensureInstance(req.user.id).catch((err) =>
+      console.error("[orchestrator] background start failed:", err.message)
+    );
+    res.status(202).json({ status: "starting", message: "Starting your Hermes instance…" });
+    return { warming: true };
+  }
+  const target = await ensureInstance(req.user.id);
+  return { target };
+}
+
+app.get("/api/hermes/models", requireUser, async (req, res) => {
   try {
+    if (orchestratorConfigured()) {
+      const state = await quickState(req.user.id);
+      if (state !== "running") {
+        ensureInstance(req.user.id).catch(() => {});
+        return res.json({ models: [], error: null, status: "starting" });
+      }
+      const target = await ensureInstance(req.user.id);
+      return res.json(await listHermesModels(target));
+    }
     res.json(await listHermesModels());
   } catch (err) {
     res.status(500).json({ models: [], error: err.message });
@@ -146,11 +195,16 @@ app.post("/api/hermes/chat", requireUser, async (req, res) => {
     if (!messages?.length) {
       return res.status(400).json({ error: "messages array is required" });
     }
+
+    const { target, warming } = await resolveChatTarget(req, res);
+    if (warming) return; // 202 already sent
+
     await streamHermesChat({
       messages,
       model: typeof req.body?.model === "string" ? req.body.model : undefined,
       res,
       signal: controller.signal,
+      target,
     });
   } catch (err) {
     if (err.name === "AbortError") return;
@@ -159,6 +213,164 @@ app.post("/api/hermes/chat", requireUser, async (req, res) => {
   } finally {
     req.off("aborted", abortUpstream);
     res.off("close", abortUpstream);
+  }
+});
+
+// ---------- Hermes cron (authenticated, per-user instance) ----------
+
+// Ensure the user's Hermes container is running, return its container name.
+async function ensureCronContainer(req) {
+  const t = await ensureInstance(req.user.id);
+  return t.containerName;
+}
+
+app.get("/api/hermes/cron/meta", requireUser, (_req, res) => {
+  res.json({
+    enabled: hermesCronConfigured(),
+    deliveryOptions: CRON_DELIVERY_OPTIONS,
+    scheduleExamples: CRON_SCHEDULE_EXAMPLES,
+  });
+});
+
+app.get("/api/hermes/cron/status", requireUser, async (req, res) => {
+  try {
+    if (!hermesCronConfigured()) {
+      return res.status(503).json({ error: "Hermes cron is not configured" });
+    }
+    // Don't force a cold start just to read status.
+    const state = await quickState(req.user.id);
+    if (state !== "running") {
+      return res.json({ status: "Instance stopped — scheduled jobs run only while it is active." });
+    }
+    const inst = await getInstance(req.user.id);
+    if (!inst?.container_name) {
+      return res.json({ status: "No Hermes instance provisioned yet." });
+    }
+    res.json(await cronSchedulerStatusFor(inst.container_name));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/hermes/cron", requireUser, async (req, res) => {
+  try {
+    if (!hermesCronConfigured()) {
+      return res.status(503).json({ error: "Hermes cron is not configured" });
+    }
+    // Listing reads jobs.json from the volume without forcing a cold start.
+    res.json(await listCronJobsFor(req.user.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/hermes/cron", requireUser, async (req, res) => {
+  try {
+    if (!hermesCronConfigured()) {
+      return res.status(503).json({ error: "Hermes cron is not configured" });
+    }
+    res.json(await createCronJobFor(await ensureCronContainer(req), req.body));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/hermes/cron/:id", requireUser, async (req, res) => {
+  try {
+    if (!hermesCronConfigured()) {
+      return res.status(503).json({ error: "Hermes cron is not configured" });
+    }
+    res.json(await editCronJobFor(await ensureCronContainer(req), req.params.id, req.body));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/hermes/cron/:id/pause", requireUser, async (req, res) => {
+  try {
+    res.json(await pauseCronJobFor(await ensureCronContainer(req), req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/hermes/cron/:id/resume", requireUser, async (req, res) => {
+  try {
+    res.json(await resumeCronJobFor(await ensureCronContainer(req), req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/hermes/cron/:id/run", requireUser, async (req, res) => {
+  try {
+    res.json(await runCronJobFor(await ensureCronContainer(req), req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/hermes/cron/:id", requireUser, async (req, res) => {
+  try {
+    res.json(await removeCronJobFor(await ensureCronContainer(req), req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------- Hermes instance status (authenticated) ----------
+
+app.get("/api/hermes/instance", requireUser, async (req, res) => {
+  try {
+    if (!orchestratorConfigured()) {
+      return res.json({ orchestrator: false, state: "shared" });
+    }
+    const state = await quickState(req.user.id);
+    res.json({ orchestrator: true, state, settings: ORCHESTRATOR_SETTINGS });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/hermes/instance/ensure", requireUser, async (req, res) => {
+  try {
+    if (!orchestratorConfigured()) {
+      return res.json({ orchestrator: false, ready: true });
+    }
+    if (!templateConfigured()) {
+      return res.status(503).json({
+        ready: false,
+        error:
+          "Hermes template not configured. Ensure ./hermes-data/.env exists (from hermes setup) and is mounted into the API container.",
+      });
+    }
+    const target = await ensureInstance(req.user.id);
+    const { models, error } = await listHermesModels(target);
+    if (error && !models?.length) {
+      return res.status(503).json({
+        ready: false,
+        state: "running",
+        containerName: target.containerName,
+        error: error || "Hermes agent is not responding",
+      });
+    }
+    res.json({
+      ready: true,
+      state: "running",
+      containerName: target.containerName,
+    });
+  } catch (err) {
+    console.error("[orchestrator] ensure failed:", err.message);
+    res.status(503).json({ ready: false, error: err.message });
+  }
+});
+
+// Admin: list all instances (any authenticated user; tighten later if needed)
+app.get("/api/hermes/instances", requireUser, async (_req, res) => {
+  try {
+    res.json({ instances: await listInstances() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -284,10 +496,12 @@ app.post("/api/posts/:id/reports", requireUserOrAgent, (req, res) => {
 
 async function start() {
   await initDb();
+  startIdleReaper();
   app.listen(PORT, HOST, () => {
     console.log(`writer-app API on http://${HOST}:${PORT}`);
     console.log(`Database: ${DATABASE_URL.replace(/:[^:@]+@/, ":***@")}`);
     console.log(`Client URL (CORS): ${CLIENT_URL}`);
+    console.log(`Hermes orchestrator: ${orchestratorConfigured() ? "enabled" : "disabled (shared/global)"}`);
   });
 }
 

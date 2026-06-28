@@ -45,12 +45,15 @@ export async function* parseOpenAIStream(
           return;
         }
 
-        const delta =
-          parsed.choices?.[0]?.delta?.content ??
-          parsed.choices?.[0]?.message?.content ??
-          "";
-        if (typeof delta === "string" && delta) {
-          yield { done: false, content: delta };
+        const delta = parsed.choices?.[0]?.delta;
+        const message = parsed.choices?.[0]?.message;
+        const content =
+          (typeof delta?.content === "string" ? delta.content : "") ||
+          (typeof delta?.text === "string" ? delta.text : "") ||
+          (typeof message?.content === "string" ? message.content : "") ||
+          (typeof parsed.choices?.[0]?.text === "string" ? parsed.choices[0].text : "");
+        if (content) {
+          yield { done: false, content };
         }
       } catch {
         // ignore partial JSON lines
