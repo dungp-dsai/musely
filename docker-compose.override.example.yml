@@ -9,6 +9,5 @@ services:
   hermes-agent:
     volumes:
       - ${HOME}/.hermes:/opt/data
-      - writer-data:/app/data
       - ./server:/app/server:ro
       - ./AGENT_GUIDE.md:/app/AGENT_GUIDE.md:ro

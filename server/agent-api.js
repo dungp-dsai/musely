@@ -1,8 +1,8 @@
 // Shared agent surface — used by agent-cli.js and REST routes in index.js.
 
 import {
-  listPosts,
-  getPost,
+  listPostsForAgent,
+  getPostForAgent,
   updateFeedbackStatus,
   addAiTaskWork,
   listAiTaskWork,
@@ -14,8 +14,9 @@ export function latestVersion(post) {
   return post.versions && post.versions.length ? post.versions[0] : null;
 }
 
-export function getActivePostId() {
-  const active = listPosts().filter((p) => p.status === "in_progress");
+export async function getActivePostId(userId) {
+  const posts = await listPostsForAgent(userId);
+  const active = posts.filter((p) => p.status === "in_progress");
   if (active.length === 0) return null;
   return active[0].id;
 }
@@ -59,16 +60,18 @@ export function slimActiveTasks(post) {
   };
 }
 
-export function getActivePostPayload() {
-  const postId = getActivePostId();
+export async function getActivePostPayload(userId) {
+  const postId = await getActivePostId(userId);
   if (!postId) return { post_id: null, title: null, content: null };
-  return slimActivePost(getPost(postId));
+  const post = await getPostForAgent(postId);
+  return slimActivePost(post);
 }
 
-export function getActiveTasksPayload() {
-  const postId = getActivePostId();
+export async function getActiveTasksPayload(userId) {
+  const postId = await getActivePostId(userId);
   if (!postId) return { post_id: null, title: null, tasks: [] };
-  return slimActiveTasks(getPost(postId));
+  const post = await getPostForAgent(postId);
+  return slimActiveTasks(post);
 }
 
 export {
@@ -77,5 +80,5 @@ export {
   listAiTaskWork,
   addAiJobReport,
   listAiJobReports,
-  getPost,
+  getPostForAgent as getPost,
 };

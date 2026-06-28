@@ -2,17 +2,29 @@ import { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
 import HermesChat from "./components/HermesChat";
+import LoginPage from "./pages/LoginPage";
+import { useAuth } from "./auth/AuthContext";
 import { api } from "./api";
 import type { Post, PostSummary, PostStatus } from "./types";
 
 type View = "writer" | "chat";
 
 export default function App() {
+  const { user, loading, logout } = useAuth();
   const [view, setView] = useState<View>("writer");
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [post, setPost] = useState<Post | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auth") === "failed") {
+      setAuthError("Google sign-in failed. Check OAuth credentials and try again.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   const loadPosts = useCallback(async () => {
     try {
@@ -33,23 +45,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!user) return;
     loadPosts();
-  }, [loadPosts]);
+  }, [user, loadPosts]);
 
   useEffect(() => {
-    if (selectedId != null) loadPost(selectedId);
-    else setPost(null);
-  }, [selectedId, loadPost]);
+    if (!user || selectedId == null) {
+      if (!user) setPost(null);
+      return;
+    }
+    loadPost(selectedId);
+  }, [user, selectedId, loadPost]);
 
-  // Poll so changes made by the Hermes agent show up live.
   useEffect(() => {
-    if (view !== "writer") return;
+    if (!user || view !== "writer") return;
     const t = setInterval(() => {
       loadPosts();
       if (selectedId != null) loadPost(selectedId);
     }, 4000);
     return () => clearInterval(t);
-  }, [loadPosts, loadPost, selectedId, view]);
+  }, [user, loadPosts, loadPost, selectedId, view]);
 
   const refresh = useCallback(async () => {
     await loadPosts();
@@ -78,12 +93,37 @@ export default function App() {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-mark">H</div>
+          <p className="login-loading">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <>
+        {authError && (
+          <div className="error-bar login-error" onClick={() => setAuthError(null)}>
+            {authError}
+          </div>
+        )}
+        <LoginPage />
+      </>
+    );
+  }
+
   return (
     <div className={`app ${view === "chat" ? "app-chat" : ""}`}>
       {view === "writer" && (
         <Sidebar
           posts={posts}
           selectedId={selectedId}
+          user={user}
           onSelect={(id) => {
             setView("writer");
             setSelectedId(id);
@@ -91,6 +131,7 @@ export default function App() {
           onCreate={create}
           onStatusChange={changeStatus}
           onOpenChat={() => setView("chat")}
+          onLogout={logout}
         />
       )}
       <main className={`main ${view === "chat" ? "main-chat" : ""}`}>
@@ -98,7 +139,11 @@ export default function App() {
           <HermesChat onBack={() => setView("writer")} />
         ) : (
           <>
-            {error && <div className="error-bar" onClick={() => setError(null)}>{error}</div>}
+            {error && (
+              <div className="error-bar" onClick={() => setError(null)}>
+                {error}
+              </div>
+            )}
             {post ? (
               <PostView post={post} onChanged={refresh} onDeleted={handleDeleted} />
             ) : (

@@ -1,5 +1,24 @@
 import type { Post, PostSummary, Version, Feedback, TaskThread, AiTaskChatMessage } from "./types";
 
+export type User = {
+  id: number;
+  email: string;
+  name: string;
+  picture: string | null;
+};
+
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
+function apiFetch(path: string, init?: RequestInit) {
+  return fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...(init?.headers || {}),
+    },
+  });
+}
+
 const json = async (res: Response) => {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -9,12 +28,17 @@ const json = async (res: Response) => {
 };
 
 export const api = {
-  listPosts: (): Promise<PostSummary[]> => fetch("/api/posts").then(json),
+  me: (): Promise<User> => apiFetch("/api/auth/me").then(json),
 
-  getPost: (id: number): Promise<Post> => fetch(`/api/posts/${id}`).then(json),
+  logout: (): Promise<{ ok: boolean }> =>
+    apiFetch("/api/auth/logout", { method: "POST" }).then(json),
+
+  listPosts: (): Promise<PostSummary[]> => apiFetch("/api/posts").then(json),
+
+  getPost: (id: number): Promise<Post> => apiFetch(`/api/posts/${id}`).then(json),
 
   createPost: (data: { title: string; idea: string }): Promise<Post> =>
-    fetch("/api/posts", {
+    apiFetch("/api/posts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -29,7 +53,7 @@ export const api = {
     if (data.idea !== undefined) body.idea = data.idea;
     if (data.status !== undefined) body.status = data.status;
     if (data.draftContent !== undefined) body.draft_content = data.draftContent;
-    return fetch(`/api/posts/${id}`, {
+    return apiFetch(`/api/posts/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -37,13 +61,13 @@ export const api = {
   },
 
   deletePost: (id: number): Promise<{ ok: boolean }> =>
-    fetch(`/api/posts/${id}`, { method: "DELETE" }).then(json),
+    apiFetch(`/api/posts/${id}`, { method: "DELETE" }).then(json),
 
   addVersion: (
     postId: number,
     data: { content: string; note?: string; title?: string; source?: "user" | "ai"; resolvesFeedbackId?: number }
   ): Promise<Version> =>
-    fetch(`/api/posts/${postId}/versions`, {
+    apiFetch(`/api/posts/${postId}/versions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -53,7 +77,7 @@ export const api = {
     postId: number,
     data: { task: string; context?: string; contextFrom?: number; contextTo?: number; versionId?: number }
   ): Promise<Feedback> =>
-    fetch(`/api/posts/${postId}/feedback`, {
+    apiFetch(`/api/posts/${postId}/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -66,30 +90,33 @@ export const api = {
     }).then(json),
 
   setFeedbackStatus: (id: number, status: Feedback["status"]): Promise<Feedback> =>
-    fetch(`/api/feedback/${id}`, {
+    apiFetch(`/api/feedback/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
     }).then(json),
 
   deleteFeedback: (id: number): Promise<{ ok: boolean }> =>
-    fetch(`/api/feedback/${id}`, { method: "DELETE" }).then(json),
+    apiFetch(`/api/feedback/${id}`, { method: "DELETE" }).then(json),
 
   getTaskThread: (taskId: number): Promise<TaskThread> =>
-    fetch(`/api/feedback/${taskId}/thread`).then(json),
+    apiFetch(`/api/feedback/${taskId}/thread`).then(json),
 
   sendTaskChat: (
     taskId: number,
     message: string
   ): Promise<{ user: AiTaskChatMessage; assistant: AiTaskChatMessage; thread: TaskThread }> =>
-    fetch(`/api/feedback/${taskId}/chat`, {
+    apiFetch(`/api/feedback/${taskId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
     }).then(json),
 
-  getConfig: (): Promise<{ hermesChatEnabled: boolean }> => fetch("/api/config").then(json),
+  getConfig: (): Promise<{ hermesChatEnabled: boolean; googleAuthEnabled: boolean }> =>
+    apiFetch("/api/config").then(json),
 
   getHermesModels: (): Promise<{ models: string[]; error: string | null }> =>
-    fetch("/api/hermes/models").then(json),
+    apiFetch("/api/hermes/models").then(json),
 };
+
+export { API_BASE };

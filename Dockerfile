@@ -1,3 +1,4 @@
+# DEPRECATED — use Dockerfile.api + Dockerfile.web with docker-compose.yml
 # writer-app — production image (UI + API on one port)
 # Requires Node 22+ for built-in node:sqlite
 

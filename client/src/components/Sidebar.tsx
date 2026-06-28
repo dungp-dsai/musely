@@ -1,21 +1,33 @@
 import { useState } from "react";
 import type { PostSummary, PostStatus } from "../types";
+import type { User } from "../api";
 import { relativeTime } from "../utils";
 
 interface Props {
   posts: PostSummary[];
   selectedId: number | null;
+  user: User;
   onSelect: (id: number) => void;
   onCreate: (data: { title: string; idea: string }) => void;
   onStatusChange: (id: number, status: PostStatus) => void;
   onOpenChat: () => void;
+  onLogout: () => void;
 }
 
 function normalizeStatus(status: string): PostStatus {
   return status === "in_progress" ? "in_progress" : "pending";
 }
 
-export default function Sidebar({ posts, selectedId, onSelect, onCreate, onStatusChange, onOpenChat }: Props) {
+export default function Sidebar({
+  posts,
+  selectedId,
+  user,
+  onSelect,
+  onCreate,
+  onStatusChange,
+  onOpenChat,
+  onLogout,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
 
@@ -37,11 +49,14 @@ export default function Sidebar({ posts, selectedId, onSelect, onCreate, onStatu
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark">D</div>
-        <div>
-          <div className="brand-name">Dung Pham</div>
-          <div className="brand-sub">from draft to perfect</div>
+        <div className="brand-mark">{user.picture ? <img src={user.picture} alt="" /> : "H"}</div>
+        <div className="brand-text">
+          <div className="brand-name">{user.name}</div>
+          <div className="brand-sub">{user.email}</div>
         </div>
+        <button type="button" className="btn-logout" onClick={onLogout} title="Sign out">
+          Sign out
+        </button>
       </div>
 
       <button type="button" className="hermes-chat-link" onClick={onOpenChat}>

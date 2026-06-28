@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, API_BASE } from "../api";
 import { renderChatMarkdown } from "../lib/chatMarkdown";
 import {
   loadConversations,
@@ -128,9 +128,10 @@ export default function HermesChat({ onBack }: Props) {
       abortRef.current = controller;
 
       try {
-        const res = await fetch("/api/hermes/chat", {
+        const res = await fetch(`${API_BASE}/api/hermes/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           signal: controller.signal,
           body: JSON.stringify({ messages: history, model }),
         });

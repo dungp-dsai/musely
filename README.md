@@ -8,15 +8,13 @@ up later.
 ```
 You write an idea  ─►  leave feedback for AI  ─►  Hermes writes a new version  ─►  you review / give more feedback
         │                      │                          │
-        └──────────────  shared SQLite database  ─────────┘
+        └──────────────  PostgreSQL (per-user)  ───────────┘
 ```
 
 ## What's inside
 
-- **`client/`** — React + Vite UI (clean, distraction-free).
-- **`server/`** — tiny Express API over a local SQLite file (`node:sqlite`, no
-  native deps). `agent-cli.js` is how the Hermes agent reads/writes the same data.
-- **`data/hermes_writer.db`** — the shared database (created on first run).
+- **`client/`** — React + Vite UI (separate dev server; nginx in Docker).
+- **`server/`** — Express API on PostgreSQL (`pg`) with **Google sign-in**.
 - **`AGENT_GUIDE.md`** — instructions for the Hermes agent.
 
 ## Features
@@ -33,25 +31,31 @@ You write an idea  ─►  leave feedback for AI  ─►  Hermes writes a new ve
 
 ```bash
 cd writer-app
-npm run install:all   # installs root + server + client deps
-npm run dev           # starts API (:5174) and UI (:5173)
+cp .env.example .env   # PostgreSQL URL, Google OAuth, SESSION_SECRET
+docker compose up -d postgres   # or use a local Postgres instance
+
+npm run install:all
+npm run dev           # API (:8081) and UI (:5173)
 ```
 
-Then open http://localhost:5173.
+Then open http://localhost:5173 and sign in with Google.
+
+Configure Google OAuth in [Google Cloud Console](https://console.cloud.google.com/) — redirect URI for local dev:  
+`http://localhost:8081/api/auth/google/callback`
 
 To run separately: `npm run dev:server` and `npm run dev:client`.
 
 ### Local test with Hermes chat
 
-**Option A — Docker (writer + Hermes in one compose, recommended for VPS parity)**
+**Option A — Docker (postgres + api + web + Hermes, recommended for VPS)**
 
 ```bash
 cd writer-app
-cp .env.docker.example .env   # set HERMES_API_SERVER_KEY
+cp .env.docker.example .env   # SESSION_SECRET, Google OAuth, HERMES_API_SERVER_KEY
 mkdir -p hermes-data
 docker compose run --rm hermes-agent setup
 docker compose up -d --build
-# http://localhost:8080
+# http://localhost:8080 — sign in with Google
 ```
 
 See **DOCKER.md** for full details.

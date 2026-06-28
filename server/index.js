@@ -1,14 +1,11 @@
-// REST API for the Hermes Writer app.
-// Thin HTTP layer over db.js. The same database file can also be driven directly
-// by the Hermes agent via agent-cli.js — see AGENT_GUIDE.md.
+// writer-app API server (PostgreSQL + Google auth). Frontend is separate.
 
 import express from "express";
 import cors from "cors";
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import cookieParser from "cookie-parser";
 import {
-  DB_PATH,
+  DATABASE_URL,
+  initDb,
   listPosts,
   getPost,
   createPost,
@@ -36,47 +33,108 @@ import {
   listHermesModels,
   streamHermesChat,
 } from "./hermes-chat.js";
+import {
+  googleAuthUrl,
+  exchangeGoogleCode,
+  setSessionCookie,
+  clearSessionCookie,
+  getUserFromRequest,
+  newOAuthState,
+} from "./auth.js";
+import { requireUser, requireUserOrAgent, publicUserId } from "./middleware/auth.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = Number(process.env.PORT) || 5174;
+const PORT = Number(process.env.PORT) || 8081;
 const HOST = process.env.HOST || "0.0.0.0";
-const STATIC_DIR =
-  process.env.STATIC_DIR || join(__dirname, "..", "client", "dist");
-const serveStatic = existsSync(STATIC_DIR);
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
 
-app.use(cors());
+app.use(
+  cors({
+    origin: CLIENT_URL,
+    credentials: true,
+  })
+);
+app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
 
-const asJson = (res, fn) => {
+const asJson = async (res, fn) => {
   try {
-    const result = fn();
+    const result = await fn();
     if (result === null) return res.status(404).json({ error: "Not found" });
     res.json(result);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(err.message === "Not found" ? 404 : 500).json({ error: err.message });
   }
 };
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, db: DB_PATH }));
+// ---------- Public ----------
+
+app.get("/api/health", (_req, res) => res.json({ ok: true, db: "postgresql" }));
 
 app.get("/api/config", (_req, res) => {
-  res.json({ hermesChatEnabled: hermesChatConfigured() });
+  res.json({
+    hermesChatEnabled: hermesChatConfigured(),
+    googleAuthEnabled: Boolean(process.env.GOOGLE_CLIENT_ID),
+  });
 });
 
-app.get("/api/hermes/models", async (_req, res) => {
+// ---------- Auth ----------
+
+app.get("/api/auth/me", async (req, res) => {
+  const user = await getUserFromRequest(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  res.json({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+  });
+});
+
+app.get("/api/auth/google", (_req, res) => {
+  try {
+    const state = newOAuthState();
+    res.cookie("oauth_state", state, { httpOnly: true, maxAge: 600_000, path: "/" });
+    res.redirect(googleAuthUrl(state));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/auth/google/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || state !== req.cookies?.oauth_state) {
+      return res.redirect(`${CLIENT_URL}?auth=failed`);
+    }
+    res.clearCookie("oauth_state", { path: "/" });
+    const user = await exchangeGoogleCode(String(code));
+    setSessionCookie(res, user.id);
+    res.redirect(CLIENT_URL);
+  } catch (err) {
+    console.error(err);
+    res.redirect(`${CLIENT_URL}?auth=failed`);
+  }
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// ---------- Hermes chat (authenticated) ----------
+
+app.get("/api/hermes/models", requireUser, async (_req, res) => {
   try {
     res.json(await listHermesModels());
   } catch (err) {
-    console.error(err);
     res.status(500).json({ models: [], error: err.message });
   }
 });
 
-app.post("/api/hermes/chat", async (req, res) => {
+app.post("/api/hermes/chat", requireUser, async (req, res) => {
   const controller = new AbortController();
-  // Only abort when the client actually disconnects — NOT req "close" (fires after body is read).
   const abortUpstream = () => {
     if (!res.writableEnded) controller.abort();
   };
@@ -104,63 +162,113 @@ app.post("/api/hermes/chat", async (req, res) => {
   }
 });
 
-// Posts
-app.get("/api/posts", (_req, res) => asJson(res, () => listPosts()));
-app.post("/api/posts", (req, res) => asJson(res, () => createPost(req.body)));
-app.get("/api/posts/:id", (req, res) => asJson(res, () => getPost(Number(req.params.id))));
-app.put("/api/posts/:id", (req, res) => asJson(res, () => updatePost(Number(req.params.id), req.body)));
-app.delete("/api/posts/:id", (req, res) =>
-  asJson(res, () => {
-    deletePost(Number(req.params.id));
+// ---------- Posts (authenticated) ----------
+
+app.get("/api/posts", requireUser, (req, res) =>
+  asJson(res, () => listPosts(req.user.id))
+);
+
+app.post("/api/posts", requireUser, (req, res) =>
+  asJson(res, () => createPost(req.user.id, req.body))
+);
+
+app.get("/api/posts/:id", requireUser, (req, res) =>
+  asJson(res, () => getPost(Number(req.params.id), req.user.id))
+);
+
+app.put("/api/posts/:id", requireUser, (req, res) =>
+  asJson(res, () => updatePost(Number(req.params.id), req.user.id, req.body))
+);
+
+app.delete("/api/posts/:id", requireUser, (req, res) =>
+  asJson(res, async () => {
+    await deletePost(Number(req.params.id), req.user.id);
     return { ok: true };
   })
 );
 
-// Versions
-app.post("/api/posts/:id/versions", (req, res) =>
-  asJson(res, () => addVersion(Number(req.params.id), req.body))
+app.post("/api/posts/:id/versions", requireUser, (req, res) =>
+  asJson(res, () => addVersion(Number(req.params.id), req.user.id, req.body))
 );
 
-// Feedback (AI task queue)
-app.post("/api/posts/:id/feedback", (req, res) =>
-  asJson(res, () => addFeedback(Number(req.params.id), req.body))
+app.post("/api/posts/:id/feedback", requireUser, (req, res) =>
+  asJson(res, () => addFeedback(Number(req.params.id), req.user.id, req.body))
 );
-app.put("/api/feedback/:id", (req, res) =>
+
+app.put("/api/feedback/:id", requireUser, (req, res) =>
   asJson(res, () => updateFeedbackStatus(Number(req.params.id), req.body.status))
 );
-app.delete("/api/feedback/:id", (req, res) =>
-  asJson(res, () => {
-    deleteFeedback(Number(req.params.id));
+
+app.delete("/api/feedback/:id", requireUser, (req, res) =>
+  asJson(res, async () => {
+    await deleteFeedback(Number(req.params.id), req.user.id);
     return { ok: true };
   })
 );
-app.get("/api/feedback/pending", (_req, res) => asJson(res, () => listPendingFeedback()));
 
-// Agent API (same surface as agent-cli.js — for Hermes over HTTP)
-app.get("/api/active", (_req, res) => asJson(res, () => getActivePostPayload()));
+app.get("/api/feedback/pending", requireUser, (req, res) =>
+  asJson(res, () => listPendingFeedback(req.user.id))
+);
 
-app.get("/api/active/tasks", (_req, res) => asJson(res, () => getActiveTasksPayload()));
+app.get("/api/feedback/:id/thread", requireUser, (req, res) =>
+  asJson(res, () => getTaskThread(Number(req.params.id), req.user.id))
+);
 
-app.post("/api/feedback/:id/claim", (req, res) =>
+app.post("/api/feedback/:id/chat", requireUser, async (req, res) => {
+  try {
+    const taskId = Number(req.params.id);
+    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+    if (!message) return res.status(400).json({ error: "message is required" });
+
+    const thread = await getTaskThread(taskId, req.user.id);
+    if (!thread) return res.status(404).json({ error: "Not found" });
+
+    const userMsg = await addAiTaskChatMessage(taskId, "user", message);
+    const updatedThread = await getTaskThread(taskId, req.user.id);
+    const reply = await generateTaskChatReply({ thread: updatedThread });
+    const assistantMsg = await addAiTaskChatMessage(taskId, "assistant", reply);
+
+    res.json({
+      user: userMsg,
+      assistant: assistantMsg,
+      thread: await getTaskThread(taskId, req.user.id),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- Agent API (Hermes — session or X-Agent-Key) ----------
+
+app.get("/api/active", requireUserOrAgent, (req, res) =>
+  asJson(res, () => getActivePostPayload(publicUserId(req)))
+);
+
+app.get("/api/active/tasks", requireUserOrAgent, (req, res) =>
+  asJson(res, () => getActiveTasksPayload(publicUserId(req)))
+);
+
+app.post("/api/feedback/:id/claim", requireUserOrAgent, (req, res) =>
   asJson(res, () => updateFeedbackStatus(Number(req.params.id), "in_progress"))
 );
 
-app.get("/api/feedback/:id/work", (req, res) =>
+app.get("/api/feedback/:id/work", requireUserOrAgent, (req, res) =>
   asJson(res, () => listAiTaskWork(Number(req.params.id)))
 );
 
-app.post("/api/feedback/:id/work", (req, res) => {
+app.post("/api/feedback/:id/work", requireUserOrAgent, (req, res) => {
   const taskId = Number(req.params.id);
   const result = typeof req.body?.result === "string" ? req.body.result : "";
   if (!result.trim()) return res.status(400).json({ error: "result is required" });
   return asJson(res, () => addAiTaskWork(taskId, result));
 });
 
-app.get("/api/posts/:id/reports", (req, res) =>
+app.get("/api/posts/:id/reports", requireUserOrAgent, (req, res) =>
   asJson(res, () => listAiJobReports(Number(req.params.id)))
 );
 
-app.post("/api/posts/:id/reports", (req, res) => {
+app.post("/api/posts/:id/reports", requireUserOrAgent, (req, res) => {
   const postId = Number(req.params.id);
   const versionNumber = Number(req.body?.version_number);
   const summary =
@@ -169,55 +277,21 @@ app.post("/api/posts/:id/reports", (req, res) => {
       : typeof req.body?.summary === "string"
         ? req.body.summary
         : "";
-  if (!versionNumber) {
-    return res.status(400).json({ error: "version_number is required" });
-  }
-  if (!summary.trim()) {
-    return res.status(400).json({ error: "summary_action_report is required" });
-  }
+  if (!versionNumber) return res.status(400).json({ error: "version_number is required" });
+  if (!summary.trim()) return res.status(400).json({ error: "summary_action_report is required" });
   return asJson(res, () => addAiJobReport(postId, versionNumber, summary));
 });
 
-// Task thread (findings + chat)
-app.get("/api/feedback/:id/thread", (req, res) =>
-  asJson(res, () => getTaskThread(Number(req.params.id)))
-);
-
-app.post("/api/feedback/:id/chat", async (req, res) => {
-  try {
-    const taskId = Number(req.params.id);
-    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
-    if (!message) return res.status(400).json({ error: "message is required" });
-
-    const thread = getTaskThread(taskId);
-    if (!thread) return res.status(404).json({ error: "Not found" });
-
-    const userMsg = addAiTaskChatMessage(taskId, "user", message);
-    const updatedThread = getTaskThread(taskId);
-    const reply = await generateTaskChatReply({ thread: updatedThread });
-    const assistantMsg = addAiTaskChatMessage(taskId, "assistant", reply);
-
-    res.json({
-      user: userMsg,
-      assistant: assistantMsg,
-      thread: getTaskThread(taskId),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-if (serveStatic) {
-  app.use(express.static(STATIC_DIR, { index: false }));
-  app.get("*", (req, res, next) => {
-    if (req.path.startsWith("/api")) return next();
-    res.sendFile(join(STATIC_DIR, "index.html"));
+async function start() {
+  await initDb();
+  app.listen(PORT, HOST, () => {
+    console.log(`writer-app API on http://${HOST}:${PORT}`);
+    console.log(`Database: ${DATABASE_URL.replace(/:[^:@]+@/, ":***@")}`);
+    console.log(`Client URL (CORS): ${CLIENT_URL}`);
   });
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`Hermes Writer listening on http://${HOST}:${PORT}`);
-  if (serveStatic) console.log(`Serving UI from ${STATIC_DIR}`);
-  console.log(`Database: ${DB_PATH}`);
+start().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });
