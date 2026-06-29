@@ -1,18 +1,24 @@
 {
-  "name": "hermes-writer",
+  "name": "musely",
   "version": "1.0.0",
   "private": true,
-  "description": "A clean writing workspace where you drop ideas and the Hermes AI agent turns them into versioned drafts.",
+  "description": "Musely — a clean writing workspace where you drop ideas and an AI agent turns them into versioned drafts.",
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend"
+  ],
   "scripts": {
-    "dev": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "npm --prefix server run dev",
-    "dev:client": "npm --prefix client run dev",
-    "build": "npm --prefix client run build",
-    "start": "npm --prefix server start",
-    "install:all": "npm install && npm --prefix server install && npm --prefix client install",
-    "agent": "node --no-warnings=ExperimentalWarning server/agent-cli.js"
+    "dev": "concurrently -n backend,frontend -c green,cyan \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "npm --workspace apps/backend run dev",
+    "dev:frontend": "npm --workspace apps/frontend run dev",
+    "build": "npm --workspace apps/frontend run build",
+    "start": "npm --workspace apps/backend run start",
+    "install:all": "npm install"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=22.5"
   }
 }

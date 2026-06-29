@@ -1,0 +1,50 @@
+# Musely backend — staging
+# Deploy from repo root:  fly deploy --config fly-staging/backend/fly.toml
+app = "musely-staging-backend"
+primary_region = "sin"
+
+[build]
+  dockerfile = "apps/backend/Dockerfile"
+
+[env]
+  NODE_ENV          = "production"
+  PORT              = "8081"
+  HOST              = "0.0.0.0"
+  # SQLite database lives on the persistent volume mounted at /data
+  DB_PATH           = "/data/musely.db"
+  # Fly Machines orchestrator — agent machines are spawned in this sibling app
+  FLY_AGENT_APP     = "musely-staging-agent"
+  FLY_AGENT_IMAGE   = "registry.fly.io/musely-staging-agent:latest"
+  FLY_AGENT_REGION  = "sin"
+  FLY_API_HOSTNAME  = "api.machines.dev"
+  HERMES_IDLE_MINUTES = "15"
+  HERMES_USER_MEMORY_MB = "2048"
+  HERMES_USER_CPUS  = "1"
+
+# Secrets set via `fly secrets set --config fly-staging/backend/fly.toml`:
+#   SESSION_SECRET          (openssl rand -hex 32)
+#   GOOGLE_CLIENT_ID
+#   GOOGLE_CLIENT_SECRET
+#   GOOGLE_CALLBACK_URL     https://musely-staging-backend.fly.dev/api/auth/google/callback
+#   CLIENT_URL              https://musely-staging-frontend.fly.dev
+#   AGENT_API_KEY           (openssl rand -hex 32)
+#   FLY_API_TOKEN           (scoped Fly token for creating agent machines)
+#   OPENROUTER_API_KEY      (optional — task chat LLM)
+
+# SQLite persistent volume.  Create once with:
+#   fly volumes create musely_data --region sin --size 1 --config fly-staging/backend/fly.toml
+[[mounts]]
+  source      = "musely_data"
+  destination = "/data"
+
+[http_service]
+  internal_port        = 8081
+  force_https          = true
+  auto_stop_machines   = "stop"
+  auto_start_machines  = true
+  min_machines_running = 1   # keep one warm so SQLite writer is always available
+
+[[vm]]
+  memory   = "512mb"
+  cpu_kind = "shared"
+  cpus     = 1

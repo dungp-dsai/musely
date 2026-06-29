@@ -1,100 +1,175 @@
-# Hermes Writer
+# Musely
 
-A clean, simple writing workspace. You drop an idea and your thoughts; the
-**Hermes AI agent** turns them into drafts. Every round of feedback produces a
-new tracked **version**, and your instructions are stored as a queue the AI picks
-up later.
+A focused writing workspace where you drop ideas and an AI agent (Hermes) turns them into versioned drafts.
+
+## What it does
+
+- **Editor** — rich-text editing with version history and diff view
+- **Feedback queue** — highlight any passage, leave a note, let Hermes act on it
+- **Per-user AI agent** — each user gets an isolated Hermes instance that reads tasks, writes new versions, and reports what changed
+- **Cron jobs** — schedule recurring Hermes tasks (daily review, morning brief, etc.)
+- **Task chat** — have a threaded conversation about any feedback item before the agent acts on it
+
+---
+
+## Monorepo layout
 
 ```
-You write an idea  ─►  leave feedback for AI  ─►  Hermes writes a new version  ─►  you review / give more feedback
-        │                      │                          │
-        └──────────────  PostgreSQL (per-user)  ───────────┘
+apps/
+  frontend/    React + Vite + TipTap editor (nginx on Fly)
+  backend/     Express API + SQLite (single Fly machine with volume)
+  agent/       Per-user Hermes agent image (Dockerfile only — machines spawned via Fly API)
+
+fly-staging/   Fly.io configs for staging (one file per service)
+  backend/fly.toml
+  frontend/fly.toml
+  agent/fly.toml
+
+fly-prod/      Same structure for production
+  backend/fly.toml
+  frontend/fly.toml
+  agent/fly.toml
+
+.github/workflows/
+  deploy-staging.yml   Auto-deploy on push to main
+  deploy-prod.yml      Manual trigger or git tag (v*)
 ```
 
-## What's inside
+---
 
-- **`client/`** — React + Vite UI (separate dev server; nginx in Docker).
-- **`server/`** — Express API on PostgreSQL (`pg`) with **Google sign-in**.
-- **`AGENT_GUIDE.md`** — instructions for the Hermes agent.
-
-## Features
-
-- **Focused editor** — a clean editor always shows the latest version, ready to post.
-- **Version tracking** — every save is an immutable snapshot tagged `you` or `AI`.
-- **Google-Docs-style history** — pick any two versions and see an inline diff with
-  additions highlighted and removals struck through; restore any version.
-- **Feedback queue** — leave instructions for the AI; they persist as `pending`
-  tasks the agent works through and marks `done`, linking the version it produced.
-- **Live sync** — the UI polls, so versions the agent writes appear automatically.
-
-## Run it
+## Local development
 
 ```bash
-cd writer-app
-cp .env.example .env   # PostgreSQL URL, Google OAuth, SESSION_SECRET
-docker compose up -d postgres   # or use a local Postgres instance
+# 1. Prerequisites: Node 22.5+
+node -v   # must be >= 22.5 (for built-in node:sqlite)
 
-npm run install:all
-npm run dev           # API (:8081) and UI (:5173)
-```
+# 2. Install dependencies
+npm install          # installs all workspaces
 
-Then open http://localhost:5173 and sign in with Google.
+# 3. Configure environment
+cp .env.example .env
+# Edit .env: fill in SESSION_SECRET, Google OAuth creds.
+# Leave FLY_API_TOKEN blank — orchestrator is disabled in local dev.
 
-Configure Google OAuth in [Google Cloud Console](https://console.cloud.google.com/) — redirect URI for local dev:  
-`http://localhost:8081/api/auth/google/callback`
-
-To run separately: `npm run dev:server` and `npm run dev:client`.
-
-### Local test with Hermes chat
-
-**Option A — Docker (postgres + api + web + per-user Hermes, recommended for VPS)**
-
-```bash
-cd writer-app
-cp .env.docker.example .env   # SESSION_SECRET, Google OAuth, HERMES_API_SERVER_KEY
-mkdir -p hermes-base
-docker compose run --rm hermes-base-setup setup   # one-time Hermes template
-docker compose up -d --build
-# http://localhost:8080 — sign in with Google
-```
-
-Each user gets an isolated Hermes container, provisioned on demand from the
-shared `./hermes-base` template and stopped after idle.
-
-See **DOCKER.md** for full details.
-
-**Option B — Native dev (faster UI iteration)**
-
-**Terminal 1 — Hermes gateway** (requires [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started) installed):
-
-```bash
-# One-time: enable API server in ~/.hermes/.env
-#   API_SERVER_ENABLED=true
-#   API_SERVER_KEY=local-dev-key-min-8-chars
-
-hermes gateway
-# Should log: API server listening on http://127.0.0.1:8642
-```
-
-**Terminal 2 — writer-app:**
-
-```bash
-cd writer-app
-npm run install:all
-cp .env.example .env   # optional; Hermes keys are read from ~/.hermes/.env
+# 4. Start dev servers (backend :8081, frontend :5173 with /api proxy)
 npm run dev
 ```
 
-Open http://localhost:5173 → sidebar **Chat with Hermes**.
+The backend reads `.env` via `--env-file-if-exists=../../.env`. SQLite data lands in `data/musely.db` (git-ignored).
 
-Verify Hermes API: `curl -s http://127.0.0.1:8642/health`
+### Google OAuth (local)
 
-## How the AI works on your writing
+1. [Google Cloud Console](https://console.cloud.google.com/) → Credentials → **Create OAuth 2.0 Client ID** (Web application)
+2. Authorised redirect URI: `http://localhost:8081/api/auth/google/callback`
+3. Copy client ID + secret into `.env`
 
-See **`AGENT_GUIDE.md`**. In short, the agent runs:
+---
+
+## Fly.io deployment
+
+### One-time setup (do this once per environment)
 
 ```bash
-node server/agent-cli.js tasks            # what to work on
-node server/agent-cli.js post <id>        # full context
-node server/agent-cli.js version <id> --content-file draft.md --resolves <feedbackId>
+# Install flyctl
+brew install flyctl
+fly auth login
+
+# Create the six Fly apps (staging)
+fly apps create musely-staging-backend
+fly apps create musely-staging-frontend
+fly apps create musely-staging-agent
+
+# Create the SQLite volume (1 GB is plenty to start)
+fly volumes create musely_data --region sin --size 1 \
+  --config fly-staging/backend/fly.toml
+
+# Set secrets (repeat for each app)
+fly secrets set \
+  SESSION_SECRET="$(openssl rand -hex 32)" \
+  GOOGLE_CLIENT_ID="..." \
+  GOOGLE_CLIENT_SECRET="..." \
+  GOOGLE_CALLBACK_URL="https://musely-staging-backend.fly.dev/api/auth/google/callback" \
+  CLIENT_URL="https://musely-staging-frontend.fly.dev" \
+  AGENT_API_KEY="$(openssl rand -hex 32)" \
+  FLY_API_TOKEN="$(fly tokens create deploy -x 999999h)" \
+  --config fly-staging/backend/fly.toml
+
+fly secrets set \
+  AGENT_API_KEY="<same value as above>" \
+  --config fly-staging/agent/fly.toml
+
+# First deploy
+fly deploy --config fly-staging/backend/fly.toml --remote-only
+fly deploy --config fly-staging/agent/fly.toml   --remote-only
+fly deploy --config fly-staging/frontend/fly.toml --remote-only
 ```
+
+Repeat with `fly-prod/` configs and `musely-prod-*` app names for production.
+
+### Continuous deployment (GitHub Actions)
+
+Add two repository secrets in **Settings → Secrets → Actions**:
+
+| Secret | Value |
+|--------|-------|
+| `FLY_API_TOKEN_STAGING` | A Fly deploy token scoped to staging apps |
+| `FLY_API_TOKEN_PROD` | A Fly deploy token scoped to prod apps |
+
+- **Push to `main`** → auto-deploys staging
+- **Create a `v*` tag** or click **Run workflow** → deploys production
+
+### Architecture on Fly
+
+```
+Browser
+  └─▶ musely-{env}-frontend  (nginx, Fly HTTP)
+        └─▶ /api/* proxied via internal network (6PN)
+              └─▶ musely-{env}-backend  (Express + SQLite on /data volume)
+                    └─▶ Fly Machines API
+                          └─▶ musely-{env}-agent  (per-user Hermes machines)
+                                each machine has its own /opt/data volume
+```
+
+Key design decisions:
+- **Single backend instance + one volume** — SQLite has one writer; Fly's volume is attached to a single machine. This avoids write conflicts and is entirely sufficient for this workload.
+- **Per-user agent machines** — instead of Docker containers on a single host, each user's Hermes instance is a real Fly Machine created on demand via the Fly Machines API and stopped after `HERMES_IDLE_MINUTES` of inactivity.
+- **Internal network only for agent** — user machines are not exposed via Fly's HTTP proxy; the backend reaches them over Fly's private WireGuard (6PN) at `<machine-id>.vm.<agent-app>.internal:8642`.
+
+---
+
+## Agent API (Hermes integration)
+
+Hermes machines call back into the backend using `X-Agent-Key: <AGENT_API_KEY>`. The key endpoints:
+
+```
+GET  /api/active              Active post + pending feedback
+GET  /api/active/tasks        Pending feedback items
+POST /api/feedback/:id/claim  Mark a task in_progress
+POST /api/feedback/:id/work   Store research/work notes
+POST /api/posts/:id/versions  Submit a new AI-written version
+POST /api/posts/:id/reports   Submit a job summary report
+```
+
+---
+
+## Environment variables reference
+
+| Variable | Default | Required in prod |
+|----------|---------|-----------------|
+| `PORT` | `8081` | — |
+| `DB_PATH` | `./data/musely.db` | Set to `/data/musely.db` |
+| `SESSION_SECRET` | — | ✓ |
+| `GOOGLE_CLIENT_ID` | — | ✓ |
+| `GOOGLE_CLIENT_SECRET` | — | ✓ |
+| `GOOGLE_CALLBACK_URL` | — | ✓ |
+| `CLIENT_URL` | `http://localhost:5173` | ✓ |
+| `AGENT_API_KEY` | — | ✓ |
+| `FLY_API_TOKEN` | — | ✓ (backend) |
+| `FLY_AGENT_APP` | — | ✓ (backend) |
+| `FLY_AGENT_IMAGE` | — | ✓ (backend) |
+| `FLY_AGENT_REGION` | `sin` | — |
+| `HERMES_IDLE_MINUTES` | `15` | — |
+| `HERMES_USER_MEMORY_MB` | `2048` | — |
+| `HERMES_USER_CPUS` | `1` | — |
+| `OPENROUTER_API_KEY` | — | for task chat |
+| `BACKEND_URL` | — | frontend fly.toml |

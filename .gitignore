@@ -1,9 +1,19 @@
 node_modules/
 dist/
-data/*.db
-data/*.db-shm
-data/*.db-wal
-hermes-data/
-.DS_Store
+*.tsbuildinfo
+
+# Local SQLite data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets / local env
 .env
-docker-compose.override.yml
+.env.*.local
+apps/**/.env
+
+# Fly
+.fly/
+
+.DS_Store

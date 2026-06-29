@@ -1,0 +1,22 @@
+# Musely frontend — production
+# Deploy from repo root:  fly deploy --config fly-prod/frontend/fly.toml
+app = "musely-prod-frontend"
+primary_region = "sin"
+
+[build]
+  dockerfile = "apps/frontend/Dockerfile"
+
+[env]
+  BACKEND_URL = "http://musely-prod-backend.internal:8081"
+
+[http_service]
+  internal_port        = 8080
+  force_https          = true
+  auto_stop_machines   = "stop"
+  auto_start_machines  = true
+  min_machines_running = 1
+
+[[vm]]
+  memory   = "256mb"
+  cpu_kind = "shared"
+  cpus     = 1

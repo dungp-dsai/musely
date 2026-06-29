@@ -1,0 +1,19 @@
+{
+  "name": "@musely/backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node --no-warnings=ExperimentalWarning --env-file-if-exists=../../.env index.js",
+    "start": "node --no-warnings=ExperimentalWarning index.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

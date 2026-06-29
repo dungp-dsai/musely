@@ -1,0 +1,48 @@
+# Musely backend — production
+# Deploy from repo root:  fly deploy --config fly-prod/backend/fly.toml
+app = "musely-prod-backend"
+primary_region = "sin"
+
+[build]
+  dockerfile = "apps/backend/Dockerfile"
+
+[env]
+  NODE_ENV          = "production"
+  PORT              = "8081"
+  HOST              = "0.0.0.0"
+  DB_PATH           = "/data/musely.db"
+  FLY_AGENT_APP     = "musely-prod-agent"
+  FLY_AGENT_IMAGE   = "registry.fly.io/musely-prod-agent:latest"
+  FLY_AGENT_REGION  = "sin"
+  FLY_API_HOSTNAME  = "api.machines.dev"
+  HERMES_IDLE_MINUTES = "30"
+  HERMES_USER_MEMORY_MB = "2048"
+  HERMES_USER_CPUS  = "1"
+
+# Secrets set via `fly secrets set --config fly-prod/backend/fly.toml`:
+#   SESSION_SECRET
+#   GOOGLE_CLIENT_ID
+#   GOOGLE_CLIENT_SECRET
+#   GOOGLE_CALLBACK_URL     https://musely-prod-backend.fly.dev/api/auth/google/callback
+#   CLIENT_URL              https://musely-prod-frontend.fly.dev (or custom domain)
+#   AGENT_API_KEY
+#   FLY_API_TOKEN
+#   OPENROUTER_API_KEY
+
+# Create volume once:
+#   fly volumes create musely_data --region sin --size 5 --config fly-prod/backend/fly.toml
+[[mounts]]
+  source      = "musely_data"
+  destination = "/data"
+
+[http_service]
+  internal_port        = 8081
+  force_https          = true
+  auto_stop_machines   = "stop"
+  auto_start_machines  = true
+  min_machines_running = 1
+
+[[vm]]
+  memory   = "512mb"
+  cpu_kind = "shared"
+  cpus     = 1
