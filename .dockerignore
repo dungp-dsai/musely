@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local SQLite data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets / local env
+.env
+.env.*.local
+apps/**/.env
+
+# Fly
+.fly/
+
+.DS_Store
