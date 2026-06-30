@@ -28,6 +28,15 @@ const json = async (res: Response) => {
   return res.json();
 };
 
+export type WaitlistEntry = {
+  id: number;
+  email: string;
+  approved: boolean;
+  source: string;
+  createdAt: string;
+  approvedAt: string | null;
+};
+
 export const api = {
   joinWaitlist: (email: string): Promise<{ ok: boolean; alreadyJoined: boolean; emailed: boolean }> =>
     apiFetch("/api/waitlist", {
@@ -35,6 +44,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
     }).then(json),
+
+  adminMe: (): Promise<{ authenticated: boolean; configured: boolean }> =>
+    apiFetch("/api/admin/me").then(json),
+
+  adminLogin: (username: string, password: string): Promise<{ ok: boolean }> =>
+    apiFetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    }).then(json),
+
+  adminLogout: (): Promise<{ ok: boolean }> =>
+    apiFetch("/api/admin/logout", { method: "POST" }).then(json),
+
+  adminListWaitlist: (): Promise<{ entries: WaitlistEntry[]; emailConfigured: boolean }> =>
+    apiFetch("/api/admin/waitlist").then(json),
+
+  adminApprove: (id: number): Promise<{ ok: boolean; emailed: boolean }> =>
+    apiFetch(`/api/admin/waitlist/${id}/approve`, { method: "POST" }).then(json),
+
+  adminRevoke: (id: number): Promise<{ ok: boolean }> =>
+    apiFetch(`/api/admin/waitlist/${id}/revoke`, { method: "POST" }).then(json),
 
   me: (): Promise<User> => apiFetch("/api/auth/me").then(json),
 

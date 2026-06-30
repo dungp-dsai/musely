@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { api } from "../api";
+import { api, API_BASE } from "../api";
 
 const FEATURES = [
   {
@@ -18,7 +18,13 @@ const FEATURES = [
 
 type Status = "idle" | "loading" | "success" | "error";
 
-export default function WaitlistPage({ onSignIn }: { onSignIn?: () => void }) {
+type WaitlistPageProps = {
+  notice?: string | null;
+  onDismissNotice?: () => void;
+};
+
+export default function WaitlistPage({ notice, onDismissNotice }: WaitlistPageProps) {
+  const loginUrl = `${API_BASE}/api/auth/google`;
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
@@ -53,12 +59,21 @@ export default function WaitlistPage({ onSignIn }: { onSignIn?: () => void }) {
           <span className="wl-brand-mark">M</span>
           <span className="wl-brand-name">Musely</span>
         </div>
-        {onSignIn && (
-          <button type="button" className="wl-signin" onClick={onSignIn}>
-            Sign in
-          </button>
-        )}
+        <a className="wl-signin" href={loginUrl}>
+          Sign in
+        </a>
       </header>
+
+      {notice && (
+        <div className="wl-notice" role="alert">
+          <span>{notice}</span>
+          {onDismissNotice && (
+            <button type="button" className="wl-notice-close" onClick={onDismissNotice} aria-label="Dismiss">
+              ×
+            </button>
+          )}
+        </div>
+      )}
 
       <main className="wl-main">
         <span className="wl-eyebrow">Now in private beta</span>

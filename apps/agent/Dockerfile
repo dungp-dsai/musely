@@ -13,7 +13,7 @@ ARG HERMES_BASE=nousresearch/hermes-agent:latest
 FROM ${HERMES_BASE}
 
 ENV API_SERVER_ENABLED=true \
-    API_SERVER_HOST=0.0.0.0 \
+    API_SERVER_HOST=:: \
     API_SERVER_PORT=8642 \
     GATEWAY_ALLOW_ALL_USERS=true
 
@@ -26,7 +26,7 @@ ENV API_SERVER_ENABLED=true \
 ENTRYPOINT ["sh", "-c", "if [ \"$$\" -eq 1 ]; then exec /init /opt/hermes/docker/main-wrapper.sh \"$@\"; else exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh \"$@\"; fi", "musely-entrypoint"]
 
 # Headless gateway + OpenAI-compatible API server on :8642 (not interactive `hermes` TUI).
-CMD ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks"]
+CMD ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"]
 
 EXPOSE 8642
 

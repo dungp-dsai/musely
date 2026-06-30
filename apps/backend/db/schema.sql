@@ -73,11 +73,14 @@ CREATE TABLE IF NOT EXISTS ai_task_chat (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- Pre-launch waiting list signups.
+-- Pre-launch waiting list signups. `approved` gates Google sign-in: only
+-- admin-approved emails can establish a session.
 CREATE TABLE IF NOT EXISTS waitlist (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   email       TEXT NOT NULL UNIQUE,
   source      TEXT NOT NULL DEFAULT 'landing',
+  approved    INTEGER NOT NULL DEFAULT 0,
+  approved_at TEXT,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

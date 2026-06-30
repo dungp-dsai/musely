@@ -180,6 +180,12 @@ The default Hermes Docker CMD runs the interactive TUI (`hermes`), which exits w
 
 **Fix:** `apps/agent/Dockerfile` sets `CMD ["hermes", "gateway", "run", ...]` and `hermes-orchestrator.js` sets the same `init.cmd` on dynamically created machines. Redeploy the **agent** image, then destroy broken user machines and retry login.
 
+### Common failure: health OK inside machine but `fetch failed` from backend
+
+Fly's private network (6PN) is **IPv6-only**. If `API_SERVER_HOST=0.0.0.0`, the API server listens on IPv4 only and other machines cannot reach `:8642`.
+
+**Fix:** set `API_SERVER_HOST=::` in the agent image and per-machine env (`hermes-orchestrator.js`).
+
 After redeploy, destroy any broken user machine and retry login:
 
 ```bash

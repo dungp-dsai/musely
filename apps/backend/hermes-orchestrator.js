@@ -33,7 +33,7 @@ const USER_CPUS = Number(process.env.HERMES_USER_CPUS) || 1;
 const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 180_000;
 
 // Headless gateway + API server (default image CMD is interactive `hermes` TUI).
-const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks"];
+const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -138,7 +138,7 @@ async function createVolume(userId) {
 function machineConfig({ volumeId, apiKey, userId }) {
   const env = {
     API_SERVER_ENABLED: "true",
-    API_SERVER_HOST: "0.0.0.0",
+    API_SERVER_HOST: "::",
     API_SERVER_PORT: String(HERMES_PORT),
     API_SERVER_KEY: apiKey,
     API_SERVER_MODEL_NAME: process.env.HERMES_API_MODEL_NAME || "Hermes Agent",
