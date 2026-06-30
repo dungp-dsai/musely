@@ -10,8 +10,8 @@ primary_region = "sin"
   API_SERVER_HOST = "0.0.0.0"
   API_SERVER_PORT = "8642"
 
-# Secrets set via `fly secrets set --config fly-prod/agent/fly.toml`:
-#   AGENT_API_KEY
+# Secrets: copy secrets.env.example → secrets.env, then:
+#   ./scripts/fly-secrets-import.sh fly-prod/agent
 
 [[vm]]
   memory   = "256mb"

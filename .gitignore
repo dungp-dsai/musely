@@ -15,5 +15,6 @@ apps/**/.env
 
 # Fly
 .fly/
+fly-*/**/secrets.env
 
 .DS_Store

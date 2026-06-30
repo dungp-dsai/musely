@@ -19,15 +19,7 @@ primary_region = "sin"
   HERMES_USER_MEMORY_MB = "2048"
   HERMES_USER_CPUS  = "1"
 
-# Secrets set via `fly secrets set --config fly-prod/backend/fly.toml`:
-#   SESSION_SECRET
-#   GOOGLE_CLIENT_ID
-#   GOOGLE_CLIENT_SECRET
-#   GOOGLE_CALLBACK_URL     https://musely-prod-backend.fly.dev/api/auth/google/callback
-#   CLIENT_URL              https://musely-prod-frontend.fly.dev (or custom domain)
-#   AGENT_API_KEY
-#   FLY_API_TOKEN
-#   OPENROUTER_API_KEY
+# Secrets: copy fly-prod/backend/secrets.env.example → secrets.env, then import.
 
 # Create volume once:
 #   fly volumes create musely_data --region sin --size 5 --config fly-prod/backend/fly.toml

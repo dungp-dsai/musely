@@ -83,20 +83,14 @@ fly apps create musely-staging-agent
 fly volumes create musely_data --region sin --size 1 \
   --config fly-staging/backend/fly.toml
 
-# Set secrets (repeat for each app)
-fly secrets set \
-  SESSION_SECRET="$(openssl rand -hex 32)" \
-  GOOGLE_CLIENT_ID="..." \
-  GOOGLE_CLIENT_SECRET="..." \
-  GOOGLE_CALLBACK_URL="https://musely-staging-backend.fly.dev/api/auth/google/callback" \
-  CLIENT_URL="https://musely-staging-frontend.fly.dev" \
-  AGENT_API_KEY="$(openssl rand -hex 32)" \
-  FLY_API_TOKEN="$(fly tokens create deploy -x 999999h)" \
-  --config fly-staging/backend/fly.toml
+# Set secrets (one secrets.env per Fly app — see secrets.env.example in each folder)
+cp fly-staging/backend/secrets.env.example fly-staging/backend/secrets.env
+cp fly-staging/agent/secrets.env.example   fly-staging/agent/secrets.env
+# Edit secrets.env files (git-ignored). AGENT_API_KEY must match on backend + agent.
 
-fly secrets set \
-  AGENT_API_KEY="<same value as above>" \
-  --config fly-staging/agent/fly.toml
+./scripts/fly-secrets-import.sh fly-staging/backend
+./scripts/fly-secrets-import.sh fly-staging/agent
+# frontend usually has no secrets (BACKEND_URL is in fly.toml)
 
 # First deploy
 fly deploy --config fly-staging/backend/fly.toml --remote-only

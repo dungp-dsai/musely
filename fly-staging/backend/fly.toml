@@ -21,15 +21,8 @@ primary_region = "sin"
   HERMES_USER_MEMORY_MB = "2048"
   HERMES_USER_CPUS  = "1"
 
-# Secrets set via `fly secrets set --config fly-staging/backend/fly.toml`:
-#   SESSION_SECRET          (openssl rand -hex 32)
-#   GOOGLE_CLIENT_ID
-#   GOOGLE_CLIENT_SECRET
-#   GOOGLE_CALLBACK_URL     https://musely-staging-backend.fly.dev/api/auth/google/callback
-#   CLIENT_URL              https://musely-staging-frontend.fly.dev
-#   AGENT_API_KEY           (openssl rand -hex 32)
-#   FLY_API_TOKEN           (scoped Fly token for creating agent machines)
-#   OPENROUTER_API_KEY      (optional — task chat LLM)
+# Secrets set via secrets.env (copy from secrets.env.example, then import):
+#   ./scripts/fly-secrets-import.sh fly-staging/backend
 
 # SQLite persistent volume.  Create once with:
 #   fly volumes create musely_data --region sin --size 1 --config fly-staging/backend/fly.toml
