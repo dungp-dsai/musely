@@ -92,10 +92,10 @@ cp fly-staging/agent/secrets.env.example   fly-staging/agent/secrets.env
 ./scripts/fly-secrets-import.sh fly-staging/agent
 # frontend usually has no secrets (BACKEND_URL is in fly.toml)
 
-# First deploy
-fly deploy --config fly-staging/backend/fly.toml --remote-only
-fly deploy --config fly-staging/agent/fly.toml   --remote-only
-fly deploy --config fly-staging/frontend/fly.toml --remote-only
+# First deploy (from repo root — uses monorepo build context)
+./scripts/fly-deploy.sh fly-staging/backend/fly.toml --remote-only
+./scripts/fly-deploy.sh fly-staging/agent/fly.toml   --remote-only
+./scripts/fly-deploy.sh fly-staging/frontend/fly.toml --remote-only
 ```
 
 Repeat with `fly-prod/` configs and `musely-prod-*` app names for production.

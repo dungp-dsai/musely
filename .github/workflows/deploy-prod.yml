@@ -27,7 +27,7 @@ jobs:
           FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy backend
-        run: flyctl deploy --config fly-prod/backend/fly.toml --remote-only
+        run: ./scripts/fly-deploy.sh fly-prod/backend/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
 
@@ -46,7 +46,7 @@ jobs:
           FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy agent image
-        run: flyctl deploy --config fly-prod/agent/fly.toml --remote-only
+        run: ./scripts/fly-deploy.sh fly-prod/agent/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
 
@@ -66,6 +66,6 @@ jobs:
           FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy frontend
-        run: flyctl deploy --config fly-prod/frontend/fly.toml --remote-only
+        run: ./scripts/fly-deploy.sh fly-prod/frontend/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}

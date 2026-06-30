@@ -1,5 +1,5 @@
 # Musely per-user Hermes agent — production
-# Deploy from repo root:  fly deploy --config fly-prod/agent/fly.toml
+# Deploy from repo root:  ./scripts/fly-deploy.sh fly-prod/agent/fly.toml
 app = "musely-prod-agent"
 primary_region = "sin"
 

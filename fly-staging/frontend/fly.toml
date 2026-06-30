@@ -1,5 +1,5 @@
 # Musely frontend — staging
-# Deploy from repo root:  fly deploy --config fly-staging/frontend/fly.toml
+# Deploy from repo root:  ./scripts/fly-deploy.sh fly-staging/frontend/fly.toml
 app = "musely-staging-frontend"
 primary_region = "sin"
 
