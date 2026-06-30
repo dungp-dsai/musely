@@ -17,6 +17,12 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@v1
 
+      - name: Ensure Fly app exists
+        run: ./scripts/fly-ensure-app.sh fly-staging/backend/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
+
       - name: Deploy backend
         run: flyctl deploy --config fly-staging/backend/fly.toml --remote-only
         env:
@@ -29,6 +35,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Ensure Fly app exists
+        run: ./scripts/fly-ensure-app.sh fly-staging/agent/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy agent image
         run: flyctl deploy --config fly-staging/agent/fly.toml --remote-only
@@ -43,6 +55,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Ensure Fly app exists
+        run: ./scripts/fly-ensure-app.sh fly-staging/frontend/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy frontend
         run: flyctl deploy --config fly-staging/frontend/fly.toml --remote-only

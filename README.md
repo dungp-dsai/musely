@@ -74,12 +74,12 @@ The backend reads `.env` via `--env-file-if-exists=../../.env`. SQLite data land
 brew install flyctl
 fly auth login
 
-# Create the six Fly apps (staging)
-fly apps create musely-staging-backend
-fly apps create musely-staging-frontend
-fly apps create musely-staging-agent
+# Create the six Fly apps (staging) — or let CI create them on first deploy
+# fly apps create musely-staging-backend
+# fly apps create musely-staging-frontend
+# fly apps create musely-staging-agent
 
-# Create the SQLite volume (1 GB is plenty to start)
+# Create the SQLite volume (1 GB is plenty to start) — CI also creates this if missing
 fly volumes create musely_data --region sin --size 1 \
   --config fly-staging/backend/fly.toml
 
@@ -120,6 +120,10 @@ Add these repository secrets in **Settings → Secrets → Actions**:
 | `FLY_API_TOKEN_PROD` | Org deploy token — all prod apps |
 
 The same org token can be reused as `FLY_API_TOKEN` in `fly-staging/backend/secrets.env` so the backend orchestrator can create/start machines in the agent app.
+
+Optionally set repository variable `FLY_ORG` to your org slug if app auto-create needs it (`Settings → Secrets and variables → Actions → Variables`).
+
+CI runs `./scripts/fly-ensure-app.sh` before each deploy — it creates the Fly app (and backend volume) if they do not exist yet.
 
 - **Push to `staging`** → auto-deploys staging
 - **Create a `v*` tag** or click **Run workflow** → deploys production
