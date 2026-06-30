@@ -206,11 +206,23 @@ export async function runTransientReader(_userId, _argv, _opts = {}) {
   return "";
 }
 
+/** Fly Machines API uses "started"; DB status uses "running". */
+export function isMachineRunning(state) {
+  return state === "started" || state === "running";
+}
+
+function normalizeMachineState(flyState) {
+  if (isMachineRunning(flyState)) return "running";
+  if (flyState === "created") return "stopped";
+  return flyState;
+}
+
 /** Fast container state check without starting the machine. */
 export async function quickState(userId) {
   const instance = await getInstance(userId);
   if (!instance?.machine_id) return "missing";
-  return getMachineState(instance.machine_id);
+  const flyState = await getMachineState(instance.machine_id);
+  return normalizeMachineState(flyState);
 }
 
 /** Resolve the display name (machine_name) for a user — does not start anything. */

@@ -10,6 +10,7 @@ import {
   execInContainer,
   runTransientReader,
   quickState,
+  isMachineRunning,
   resolveMachineId,
 } from "./hermes-orchestrator.js";
 
@@ -115,7 +116,7 @@ const JOBS_PATH = "/opt/data/cron/jobs.json";
 export async function listCronJobsFor(userId) {
   const state = await quickState(userId);
   try {
-    if (state === "started" || state === "running") {
+    if (isMachineRunning(state)) {
       const machineId = await resolveMachineId(userId);
       if (machineId) {
         const out = await execInContainer(machineId, ["cat", JOBS_PATH]);
