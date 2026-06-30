@@ -114,7 +114,7 @@ Update `fly-staging/backend/secrets.env` then import (one-time / when secrets ch
 ./scripts/fly-secrets-import.sh fly-staging/backend
 ```
 
-Required for orchestrator on staging: `FLY_API_TOKEN` (org-scoped; separate from `FLY_API_TOKEN_STAGING` in GitHub).
+Required for orchestrator on staging: `MACHINES_API_TOKEN` in backend secrets (org-scoped; separate from GitHub `FLY_API_TOKEN_STAGING`).
 
 ## Common mistakes (avoid)
 

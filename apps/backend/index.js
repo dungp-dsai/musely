@@ -105,7 +105,9 @@ app.get("/api/config", (_req, res) => {
     orchestratorMissing:
       orchestrator || process.env.HERMES_ORCHESTRATOR === "disabled"
         ? []
-        : ["FLY_API_TOKEN", "FLY_AGENT_APP", "FLY_AGENT_IMAGE"].filter((k) => !process.env[k]),
+        : ["MACHINES_API_TOKEN", "FLY_AGENT_APP", "FLY_AGENT_IMAGE"].filter(
+            (k) => !(k === "MACHINES_API_TOKEN" ? process.env.MACHINES_API_TOKEN || process.env.FLY_API_TOKEN : process.env[k])
+          ),
   });
 });
 

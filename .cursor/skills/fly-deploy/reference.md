@@ -68,11 +68,11 @@ Same three jobs for `fly-prod/*`. `cancel-in-progress: false` — never cancel i
 
 | App | Typical secrets |
 |-----|-----------------|
-| `fly-staging/backend` | SESSION_SECRET, GOOGLE_*, CLIENT_URL, AGENT_API_KEY, **FLY_API_TOKEN** |
+| `fly-staging/backend` | SESSION_SECRET, GOOGLE_*, CLIENT_URL, AGENT_API_KEY, **MACHINES_API_TOKEN** |
 | `fly-staging/agent` | AGENT_API_KEY (must match backend) |
 
 - **GitHub** `FLY_API_TOKEN_STAGING` / `FLY_API_TOKEN_PROD` — CI deploy only
-- **Fly secret** `FLY_API_TOKEN` on backend — runtime Machines orchestrator
+- **Fly secret** `MACHINES_API_TOKEN` on backend — runtime Machines orchestrator (not `FLY_API_TOKEN`; Fly strips that name)
 
 Import secrets locally (not a deploy):
 
@@ -123,7 +123,7 @@ Agent app was deployed without `latest` tag. Push to `staging`/`main` so CI re-r
 
 `curl -sL https://staging.musely.tech/api/config` → `orchestratorEnabled: false`
 
-Import `FLY_API_TOKEN` into backend secrets, then push to `staging` to redeploy backend.
+Import `MACHINES_API_TOKEN` into backend secrets, then push to `staging` to redeploy backend.
 
 ### Docker build path error in CI
 

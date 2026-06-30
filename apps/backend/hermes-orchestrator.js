@@ -16,7 +16,11 @@ import {
   listIdleInstances,
 } from "./db.js";
 
-const FLY_API_TOKEN = process.env.FLY_API_TOKEN;
+// Fly strips FLY_API_TOKEN from app runtime (reserved for flyctl/CI). Use MACHINES_API_TOKEN.
+function machinesApiToken() {
+  return process.env.MACHINES_API_TOKEN || process.env.FLY_API_TOKEN;
+}
+
 const FLY_AGENT_APP = process.env.FLY_AGENT_APP;
 const FLY_AGENT_IMAGE = process.env.FLY_AGENT_IMAGE;
 const FLY_AGENT_REGION = process.env.FLY_AGENT_REGION || "sin";
@@ -35,7 +39,7 @@ const inflight = new Map();
 
 export function orchestratorConfigured() {
   if (process.env.HERMES_ORCHESTRATOR === "disabled") return false;
-  return Boolean(FLY_API_TOKEN && FLY_AGENT_APP && FLY_AGENT_IMAGE);
+  return Boolean(machinesApiToken() && FLY_AGENT_APP && FLY_AGENT_IMAGE);
 }
 
 export function templateConfigured() {
@@ -49,7 +53,7 @@ async function flyRequest(method, path, body) {
   const opts = {
     method,
     headers: {
-      Authorization: `Bearer ${FLY_API_TOKEN}`,
+      Authorization: `Bearer ${machinesApiToken()}`,
       "Content-Type": "application/json",
     },
   };
@@ -291,7 +295,7 @@ async function provisionInstance(userId) {
 export function ensureInstance(userId) {
   if (!orchestratorConfigured()) {
     throw new Error(
-      "Hermes orchestrator is not available (set FLY_API_TOKEN, FLY_AGENT_APP, FLY_AGENT_IMAGE)"
+      "Hermes orchestrator is not available (set MACHINES_API_TOKEN, FLY_AGENT_APP, FLY_AGENT_IMAGE)"
     );
   }
   if (inflight.has(userId)) return inflight.get(userId);
@@ -373,7 +377,7 @@ let reaperTimer = null;
 
 export function startIdleReaper() {
   if (!orchestratorConfigured()) {
-    console.log("[orchestrator] disabled (FLY_API_TOKEN / FLY_AGENT_APP not set)");
+    console.log("[orchestrator] disabled (MACHINES_API_TOKEN / FLY_AGENT_APP not set)");
     return;
   }
   if (reaperTimer) return;

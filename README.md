@@ -49,7 +49,7 @@ npm install          # installs all workspaces
 # 3. Configure environment
 cp .env.example .env
 # Edit .env: fill in SESSION_SECRET, Google OAuth creds.
-# Leave FLY_API_TOKEN blank — orchestrator is disabled in local dev.
+# Leave MACHINES_API_TOKEN blank — orchestrator is disabled in local dev.
 
 # 4. Start dev servers (backend :8081, frontend :5173 with /api proxy)
 npm run dev
@@ -119,7 +119,7 @@ Add these repository secrets in **Settings → Secrets → Actions**:
 | `FLY_API_TOKEN_STAGING` | Org deploy token — all staging apps |
 | `FLY_API_TOKEN_PROD` | Org deploy token — all prod apps |
 
-The same org token can be reused as `FLY_API_TOKEN` in `fly-staging/backend/secrets.env` so the backend orchestrator can create/start machines in the agent app.
+The same org token goes in `fly-staging/backend/secrets.env` as **`MACHINES_API_TOKEN`** (not `FLY_API_TOKEN` — Fly strips that name from app runtime).
 
 Optionally set repository variable `FLY_ORG` to your org slug if app auto-create needs it (`Settings → Secrets and variables → Actions → Variables`).
 
@@ -174,7 +174,7 @@ POST /api/posts/:id/reports   Submit a job summary report
 | `GOOGLE_CALLBACK_URL` | — | ✓ |
 | `CLIENT_URL` | `http://localhost:5173` | ✓ |
 | `AGENT_API_KEY` | — | ✓ |
-| `FLY_API_TOKEN` | — | ✓ (backend) |
+| `MACHINES_API_TOKEN` | — | ✓ (backend Fly secret) |
 | `FLY_AGENT_APP` | — | ✓ (backend) |
 | `FLY_AGENT_IMAGE` | — | ✓ (backend) |
 | `FLY_AGENT_REGION` | `sin` | — |
