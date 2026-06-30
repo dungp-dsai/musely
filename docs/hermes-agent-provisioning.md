@@ -125,7 +125,7 @@ const machine = await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines`, {
       memory_mb: USER_MEMORY_MB,
     },
   },
-  skip_launch: true,
+  // No skip_launch — machine boots on create. /start only works from "stopped", not "created".
 });
 ```
 
@@ -144,8 +144,9 @@ Hermes data (cron jobs, etc.) lives under `/opt/data` on that volume.
 After create, `ensureInstance` starts the machine and waits for health:
 
 ```javascript
-} else if (state === "stopped" || state === "created") {
-  await setInstanceStatus(userId, "starting");
+} else if (state === "created") {
+  await launchMachine(machineId);   // update API — /start rejects "created"
+} else if (state === "stopped") {
   await startMachine(machineId);
 }
 // ...

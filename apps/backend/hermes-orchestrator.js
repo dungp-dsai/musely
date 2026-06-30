@@ -132,7 +132,7 @@ async function createVolume(userId) {
   return vol.id;
 }
 
-async function createMachine({ machineName, volumeId, apiKey, userId }) {
+function machineConfig({ volumeId, apiKey, userId }) {
   const env = {
     API_SERVER_ENABLED: "true",
     API_SERVER_HOST: "0.0.0.0",
@@ -143,23 +143,37 @@ async function createMachine({ machineName, volumeId, apiKey, userId }) {
   };
   if (process.env.AGENT_API_KEY) env.AGENT_API_KEY = process.env.AGENT_API_KEY;
 
+  return {
+    image: FLY_AGENT_IMAGE,
+    env,
+    mounts: [{ volume: volumeId, path: "/opt/data" }],
+    restart: { policy: "no" },
+    guest: {
+      cpu_kind: "shared",
+      cpus: USER_CPUS,
+      memory_mb: USER_MEMORY_MB,
+    },
+  };
+}
+
+async function createMachine({ machineName, volumeId, apiKey, userId }) {
   const machine = await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines`, {
     name: machineName,
     region: FLY_AGENT_REGION,
-    config: {
-      image: FLY_AGENT_IMAGE,
-      env,
-      mounts: [{ volume: volumeId, path: "/opt/data" }],
-      restart: { policy: "no" },
-      guest: {
-        cpu_kind: "shared",
-        cpus: USER_CPUS,
-        memory_mb: USER_MEMORY_MB,
-      },
-    },
-    skip_launch: true,
+    config: machineConfig({ volumeId, apiKey, userId }),
+    // Boot on create. skip_launch leaves machines in "created" where /start does not work.
   });
   return machine;
+}
+
+/** /start only works from "stopped". Machines in "created" must be launched via update. */
+async function launchMachine(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) throw new Error("Machine config missing");
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: machine.config,
+    skip_launch: false,
+  });
 }
 
 async function startMachine(machineId) {
@@ -307,7 +321,7 @@ export function ensureInstance(userId) {
     const state = await getMachineState(machineId);
 
     if (state === "destroyed" || state === "missing") {
-      // Machine was deleted externally; recreate it (volume persists).
+      // Machine was deleted externally; recreate it (volume persists). Boots on create.
       const user = await getUserById(userId);
       const newName = machineNameForUser(userId, user?.name);
       const volumeId = (await findExistingVolume(userId)) || (await createVolume(userId));
@@ -316,8 +330,11 @@ export function ensureInstance(userId) {
       machineId = newMachine.id;
       machineName = newName;
       await setInstanceStatus(userId, "starting");
-      await startMachine(machineId);
-    } else if (state === "stopped" || state === "created") {
+    } else if (state === "created") {
+      // skip_launch leftovers or mid-provision — /start rejects "created"; launch via update.
+      await setInstanceStatus(userId, "starting");
+      await launchMachine(machineId);
+    } else if (state === "stopped") {
       await setInstanceStatus(userId, "starting");
       await startMachine(machineId);
     }
