@@ -1,9 +1,11 @@
 name: Deploy — Production
 
 on:
-  # Trigger manually from GitHub Actions UI, or tag a release.
+  # Direct pushes and merged PRs to main deploy production (mirrors staging → staging).
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
