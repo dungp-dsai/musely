@@ -27,6 +27,16 @@ export function useHermesBoot(user: User | null) {
       try {
         const config = await api.getConfig();
         if (!config.orchestratorEnabled) {
+          const missing = (config as { orchestratorMissing?: string[] }).orchestratorMissing;
+          if (missing?.length) {
+            if (!cancelled) {
+              setError(
+                `Assistant orchestrator is not configured on the server (missing: ${missing.join(", ")}).`
+              );
+              setPhase("error");
+            }
+            return;
+          }
           if (!cancelled) setPhase("ready");
           return;
         }

@@ -50,6 +50,7 @@ import {
   orchestratorConfigured,
   ensureInstance,
   quickState,
+  isMachineRunning,
   templateConfigured,
   startIdleReaper,
   ORCHESTRATOR_SETTINGS,
@@ -95,11 +96,18 @@ const asJson = async (res, fn) => {
 app.get("/api/health", (_req, res) => res.json({ ok: true, db: "sqlite" }));
 
 app.get("/api/config", (_req, res) => {
+  const orchestrator = orchestratorConfigured();
   res.json({
-    hermesChatEnabled: hermesChatConfigured() || orchestratorConfigured(),
+    hermesChatEnabled: hermesChatConfigured() || orchestrator,
     hermesCronEnabled: hermesCronConfigured(),
     googleAuthEnabled: Boolean(process.env.GOOGLE_CLIENT_ID),
-    orchestratorEnabled: orchestratorConfigured(),
+    orchestratorEnabled: orchestrator,
+    orchestratorMissing:
+      orchestrator || process.env.HERMES_ORCHESTRATOR === "disabled"
+        ? []
+        : ["MACHINES_API_TOKEN", "FLY_AGENT_APP", "FLY_AGENT_IMAGE"].filter(
+            (k) => !(k === "MACHINES_API_TOKEN" ? process.env.MACHINES_API_TOKEN || process.env.FLY_API_TOKEN : process.env[k])
+          ),
   });
 });
 
@@ -153,7 +161,7 @@ app.post("/api/auth/logout", (_req, res) => {
 async function resolveChatTarget(req, res) {
   if (!orchestratorConfigured()) return { target: undefined };
   const state = await quickState(req.user.id);
-  if (state !== "running") {
+  if (!isMachineRunning(state)) {
     // kick off start in the background (coalesced) and tell the client to retry
     ensureInstance(req.user.id).catch((err) =>
       console.error("[orchestrator] background start failed:", err.message)
@@ -169,7 +177,7 @@ app.get("/api/hermes/models", requireUser, async (req, res) => {
   try {
     if (orchestratorConfigured()) {
       const state = await quickState(req.user.id);
-      if (state !== "running") {
+      if (!isMachineRunning(state)) {
         ensureInstance(req.user.id).catch(() => {});
         return res.json({ models: [], error: null, status: "starting" });
       }
@@ -239,7 +247,7 @@ app.get("/api/hermes/cron/status", requireUser, async (req, res) => {
     }
     // Don't force a cold start just to read status.
     const state = await quickState(req.user.id);
-    if (state !== "running") {
+    if (!isMachineRunning(state)) {
       return res.json({ status: "Instance stopped — scheduled jobs run only while it is active." });
     }
     const inst = await getInstance(req.user.id);

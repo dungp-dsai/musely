@@ -35,4 +35,11 @@ if [[ ! -f "$DOCKERFILE_ABS" ]]; then
 fi
 
 echo "Deploying with context=$ROOT dockerfile=$DOCKERFILE_ABS config=$CONFIG"
-exec flyctl deploy "$ROOT" --config "$CONFIG_PATH" --dockerfile "$DOCKERFILE_ABS" "$@"
+
+DEPLOY_ARGS=("$ROOT" --config "$CONFIG_PATH" --dockerfile "$DOCKERFILE_ABS")
+# Agent app images are referenced as registry.fly.io/<app>:latest by the backend orchestrator.
+if [[ "$CONFIG" == *"/agent/"* ]]; then
+  DEPLOY_ARGS+=(--image-label latest)
+fi
+
+exec flyctl deploy "${DEPLOY_ARGS[@]}" "$@"
