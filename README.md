@@ -74,12 +74,12 @@ The backend reads `.env` via `--env-file-if-exists=../../.env`. SQLite data land
 brew install flyctl
 fly auth login
 
-# Create the six Fly apps (staging)
-fly apps create musely-staging-backend
-fly apps create musely-staging-frontend
-fly apps create musely-staging-agent
+# Create the six Fly apps (staging) — or let CI create them on first deploy
+# fly apps create musely-staging-backend
+# fly apps create musely-staging-frontend
+# fly apps create musely-staging-agent
 
-# Create the SQLite volume (1 GB is plenty to start)
+# Create the SQLite volume (1 GB is plenty to start) — CI also creates this if missing
 fly volumes create musely_data --region sin --size 1 \
   --config fly-staging/backend/fly.toml
 
@@ -92,24 +92,40 @@ cp fly-staging/agent/secrets.env.example   fly-staging/agent/secrets.env
 ./scripts/fly-secrets-import.sh fly-staging/agent
 # frontend usually has no secrets (BACKEND_URL is in fly.toml)
 
-# First deploy
-fly deploy --config fly-staging/backend/fly.toml --remote-only
-fly deploy --config fly-staging/agent/fly.toml   --remote-only
-fly deploy --config fly-staging/frontend/fly.toml --remote-only
+# First deploy (from repo root — uses monorepo build context)
+./scripts/fly-deploy.sh fly-staging/backend/fly.toml --remote-only
+./scripts/fly-deploy.sh fly-staging/agent/fly.toml   --remote-only
+./scripts/fly-deploy.sh fly-staging/frontend/fly.toml --remote-only
 ```
 
 Repeat with `fly-prod/` configs and `musely-prod-*` app names for production.
 
 ### Continuous deployment (GitHub Actions)
 
-Add two repository secrets in **Settings → Secrets → Actions**:
+Use **one org-scoped token per environment** — it can deploy and manage all apps in that Fly org (backend, frontend, agent):
 
-| Secret | Value |
-|--------|-------|
-| `FLY_API_TOKEN_STAGING` | A Fly deploy token scoped to staging apps |
-| `FLY_API_TOKEN_PROD` | A Fly deploy token scoped to prod apps |
+```bash
+# Staging org token → GitHub secret FLY_API_TOKEN_STAGING
+fly tokens create org -o <your-org-slug> -n "musely-staging-ci" -x 720h
 
-- **Push to `main`** → auto-deploys staging
+# Production org token → GitHub secret FLY_API_TOKEN_PROD
+fly tokens create org -o <your-org-slug> -n "musely-prod-ci" -x 720h
+```
+
+Add these repository secrets in **Settings → Secrets → Actions**:
+
+| GitHub secret | Scope |
+|---------------|-------|
+| `FLY_API_TOKEN_STAGING` | Org deploy token — all staging apps |
+| `FLY_API_TOKEN_PROD` | Org deploy token — all prod apps |
+
+The same org token can be reused as `FLY_API_TOKEN` in `fly-staging/backend/secrets.env` so the backend orchestrator can create/start machines in the agent app.
+
+Optionally set repository variable `FLY_ORG` to your org slug if app auto-create needs it (`Settings → Secrets and variables → Actions → Variables`).
+
+CI runs `./scripts/fly-ensure-app.sh` before each deploy — it creates the Fly app (and backend volume) if they do not exist yet.
+
+- **Push to `staging`** → auto-deploys staging
 - **Create a `v*` tag** or click **Run workflow** → deploys production
 
 ### Architecture on Fly

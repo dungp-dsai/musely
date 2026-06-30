@@ -3,12 +3,12 @@
 # via the Fly Machines API.  The app itself has no long-lived machines;
 # `fly deploy` here only builds and pushes the image to the Fly registry.
 #
-# Deploy from repo root:  fly deploy --config fly-staging/agent/fly.toml
+# Deploy from repo root:  ./scripts/fly-deploy.sh fly-staging/agent/fly.toml
 app = "musely-staging-agent"
 primary_region = "sin"
 
 [build]
-  dockerfile = "apps/agent/Dockerfile"
+  dockerfile = "../../apps/agent/Dockerfile"
 
 # Each dynamically-created user machine receives its own env at creation time
 # (API_SERVER_KEY, AGENT_USER_ID, etc.) — see hermes-orchestrator.js.

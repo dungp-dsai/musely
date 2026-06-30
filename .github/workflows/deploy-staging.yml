@@ -15,10 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Ensure Fly app exists
+        run: ./scripts/fly-ensure-app.sh fly-staging/backend/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy backend
-        run: fly deploy --config fly-staging/backend/fly.toml --remote-only
+        run: ./scripts/fly-deploy.sh fly-staging/backend/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
 
@@ -28,10 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Ensure Fly app exists
+        run: ./scripts/fly-ensure-app.sh fly-staging/agent/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy agent image
-        run: fly deploy --config fly-staging/agent/fly.toml --remote-only
+        run: ./scripts/fly-deploy.sh fly-staging/agent/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
 
@@ -42,9 +54,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Ensure Fly app exists
+        run: ./scripts/fly-ensure-app.sh fly-staging/frontend/fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
 
       - name: Deploy frontend
-        run: fly deploy --config fly-staging/frontend/fly.toml --remote-only
+        run: ./scripts/fly-deploy.sh fly-staging/frontend/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
