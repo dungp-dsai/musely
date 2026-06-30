@@ -8,7 +8,7 @@ Browser → musely-{env}-frontend (nginx :8080, TLS)
                           └─ Express :8081 (SQLite on /data volume)
 ```
 
-Agent app (`musely-{env}-agent`) is only an image registry. Per-user Hermes machines are spawned by the backend via Fly Machines API.
+Agent app (`musely-{env}-agent`) is only an image registry. Per-user Hermes machines are spawned by the backend via Fly Machines API using `registry.fly.io/musely-{env}-agent:latest`.
 
 ## Monorepo layout
 
@@ -18,107 +18,122 @@ apps/backend/      Express + SQLite
 apps/agent/        Hermes agent Dockerfile
 fly-staging/       fly.toml + secrets.env per app
 fly-prod/
-scripts/fly-deploy.sh
-scripts/fly-ensure-app.sh
+.github/workflows/ deploy-staging.yml, deploy-prod.yml
+scripts/fly-deploy.sh      # CI only — never run locally
+scripts/fly-ensure-app.sh  # CI only — never run locally
 scripts/fly-secrets-import.sh
 ```
 
+## CI/CD (sole deploy path)
+
+### Staging — `deploy-staging.yml`
+
+Trigger: **push to `staging`**
+
+Jobs (parallel except frontend waits on backend):
+
+1. `deploy-backend` — `fly-ensure-app.sh` + `fly-deploy.sh fly-staging/backend/fly.toml --remote-only`
+2. `deploy-agent` — same for `fly-staging/agent/fly.toml` (image tagged `latest`)
+3. `deploy-frontend` — same for `fly-staging/frontend/fly.toml` (`needs: deploy-backend`)
+
+### Production — `deploy-prod.yml`
+
+Trigger: **push to `main`**, **`workflow_dispatch`**, or **`v*` tag**
+
+Same three jobs for `fly-prod/*`. `cancel-in-progress: false` — never cancel in-flight prod deploys.
+
+### Why no local deploy
+
+- Consistent build context and tokens via GitHub secrets
+- Audit trail in Actions
+- Staging-first gate before prod merge
+- Agent images always get `--image-label latest` (required by `FLY_AGENT_IMAGE` in backend fly.toml)
+
 ## fly.toml conventions
 
-- `dockerfile` paths are **relative to the fly.toml file**: `../../apps/backend/Dockerfile`
-- Backend `[[mounts]]` → `/data` for SQLite (`DB_PATH=/data/musely.db`)
-- Backend `min_machines_running = 1` (single SQLite writer)
-- Backend `force_https = false` (required for flycast)
+- `dockerfile` paths relative to fly.toml: `../../apps/backend/Dockerfile`
+- Backend `[[mounts]]` → `/data` for SQLite
+- Backend `min_machines_running = 1`, `force_https = false`
 - Frontend `BACKEND_URL = "http://musely-{env}-backend.flycast"`
+- Backend `FLY_AGENT_IMAGE = "registry.fly.io/musely-{env}-agent:latest"`
 
 ## nginx (frontend)
 
 `apps/frontend/nginx.conf.template`:
-- `NGINX_ENVSUBST_FILTER=BACKEND_URL` in Dockerfile (only substitute that var)
+
+- `NGINX_ENVSUBST_FILTER=BACKEND_URL` in Dockerfile
 - `resolver [fdaa::3]:53` + variable `proxy_pass` for flycast DNS
-- Do not use `$$uri` escaping — use normal nginx `$uri`
-
-## Flycast setup (once per backend app)
-
-```bash
-flyctl ips allocate-v6 --private -a musely-staging-backend
-flyctl ips list -a musely-staging-backend
-# should show: private ingress
-```
-
-DNS: `musely-staging-backend.flycast` resolves on Fly's internal network.
 
 ## Secrets
 
-Per-app `secrets.env` (git-ignored); templates in `secrets.env.example`.
-
 | App | Typical secrets |
 |-----|-----------------|
-| `fly-staging/backend` | SESSION_SECRET, GOOGLE_*, CLIENT_URL, AGENT_API_KEY, FLY_API_TOKEN |
+| `fly-staging/backend` | SESSION_SECRET, GOOGLE_*, CLIENT_URL, AGENT_API_KEY, **FLY_API_TOKEN** |
 | `fly-staging/agent` | AGENT_API_KEY (must match backend) |
-| `fly-staging/frontend` | usually none (BACKEND_URL in fly.toml [env]) |
 
-GitHub Actions: `FLY_API_TOKEN_STAGING` (org-scoped, shared across staging apps).
+- **GitHub** `FLY_API_TOKEN_STAGING` / `FLY_API_TOKEN_PROD` — CI deploy only
+- **Fly secret** `FLY_API_TOKEN` on backend — runtime Machines orchestrator
 
-Backend runtime `FLY_API_TOKEN` (in secrets.env) is for Fly Machines orchestrator — separate from CI deploy token.
+Import secrets locally (not a deploy):
 
-## Domains (Vercel DNS → Fly frontend)
+```bash
+./scripts/fly-secrets-import.sh fly-staging/backend
+```
+
+## Domains
 
 | Hostname | Fly app |
 |----------|---------|
 | `staging.musely.tech` | `musely-staging-frontend` |
 | `musely.tech` | `musely-prod-frontend` |
 
-Apex `@` on Vercel: add **A** + **AAAA** from `flyctl certs setup musely.tech -a musely-prod-frontend` to override locked Vercel ALIAS records. Do not point DNS at backend apps.
+DNS A/AAAA → **frontend** app IPs only. Certs via `flyctl certs add` (one-time infra).
 
-```bash
-flyctl certs add staging.musely.tech -a musely-staging-frontend
-flyctl certs add musely.tech -a musely-prod-frontend
-flyctl certs show musely.tech -a musely-prod-frontend
-```
+## Debugging (read-only flyctl OK)
 
-## CI/CD
+### Check deploy status
 
-| Trigger | Workflow | Token |
-|---------|----------|-------|
-| Push to `staging` | `deploy-staging.yml` | `FLY_API_TOKEN_STAGING` |
-| Manual / `v*` tag | `deploy-prod.yml` | `FLY_API_TOKEN_PROD` |
+GitHub Actions → workflow run for the branch push.
 
-## Debugging checklist
-
-### 502 on `/api/*` (nginx)
+### 502 on `/api/*`
 
 ```bash
 flyctl logs -a musely-staging-frontend --no-tail | tail -20
 ```
 
-| Log message | Fix |
-|-------------|-----|
-| `connection refused` + machine 6PN IP | Use `.flycast`, not `.internal:8081` |
+| Log | Fix |
+|-----|-----|
+| `connection refused` + 6PN IP | Use `.flycast`, not `.internal:8081` |
 | `could not be resolved ...flycast` | `flyctl ips allocate-v6 --private -a <backend>` |
 | `301` redirect loop | Backend `force_https = false` |
 
-### Verify chain
+### Verify endpoints
 
 ```bash
 curl -sL https://staging.musely.tech/api/health
+curl -sL https://staging.musely.tech/api/config
 curl -sI https://staging.musely.tech/api/auth/google
-curl -sI https://musely-staging-backend.fly.dev/api/health   # direct backend (public)
 ```
 
-### Docker build path error
+### Agent `manifest unknown tag=latest`
+
+Agent app was deployed without `latest` tag. Push to `staging`/`main` so CI re-runs `fly-deploy.sh` on `*/agent/fly.toml` (adds `--image-label latest`).
+
+### Orchestrator disabled on staging
+
+`curl -sL https://staging.musely.tech/api/config` → `orchestratorEnabled: false`
+
+Import `FLY_API_TOKEN` into backend secrets, then push to `staging` to redeploy backend.
+
+### Docker build path error in CI
 
 Error: `fly-staging/backend/apps/backend/Dockerfile not found`  
-→ Use `./scripts/fly-deploy.sh` and `../../apps/...` in fly.toml.
+→ `dockerfile` in fly.toml must be `../../apps/...`; CI must use `fly-deploy.sh` (not raw `flyctl deploy --config`).
 
 ## Production deploy (user-initiated only)
 
-Only when user explicitly asks:
+When user explicitly requests prod:
 
-```bash
-./scripts/fly-deploy.sh fly-prod/backend/fly.toml --remote-only
-./scripts/fly-deploy.sh fly-prod/agent/fly.toml --remote-only
-./scripts/fly-deploy.sh fly-prod/frontend/fly.toml --remote-only
-```
-
-Or trigger `deploy-prod.yml` via GitHub Actions after merge.
+1. Verify staging
+2. User merges to `main` (or triggers `deploy-prod.yml` manually)
+3. Monitor GitHub Actions — **do not run flyctl deploy locally**
