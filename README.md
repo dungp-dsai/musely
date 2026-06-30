@@ -102,14 +102,26 @@ Repeat with `fly-prod/` configs and `musely-prod-*` app names for production.
 
 ### Continuous deployment (GitHub Actions)
 
-Add two repository secrets in **Settings → Secrets → Actions**:
+Use **one org-scoped token per environment** — it can deploy and manage all apps in that Fly org (backend, frontend, agent):
 
-| Secret | Value |
-|--------|-------|
-| `FLY_API_TOKEN_STAGING` | A Fly deploy token scoped to staging apps |
-| `FLY_API_TOKEN_PROD` | A Fly deploy token scoped to prod apps |
+```bash
+# Staging org token → GitHub secret FLY_API_TOKEN_STAGING
+fly tokens create org -o <your-org-slug> -n "musely-staging-ci" -x 720h
 
-- **Push to `main`** → auto-deploys staging
+# Production org token → GitHub secret FLY_API_TOKEN_PROD
+fly tokens create org -o <your-org-slug> -n "musely-prod-ci" -x 720h
+```
+
+Add these repository secrets in **Settings → Secrets → Actions**:
+
+| GitHub secret | Scope |
+|---------------|-------|
+| `FLY_API_TOKEN_STAGING` | Org deploy token — all staging apps |
+| `FLY_API_TOKEN_PROD` | Org deploy token — all prod apps |
+
+The same org token can be reused as `FLY_API_TOKEN` in `fly-staging/backend/secrets.env` so the backend orchestrator can create/start machines in the agent app.
+
+- **Push to `staging`** → auto-deploys staging
 - **Create a `v*` tag** or click **Run workflow** → deploys production
 
 ### Architecture on Fly
