@@ -16,6 +16,9 @@ RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime
 
+# Only substitute BACKEND_URL — leave nginx $variables ($uri, $host, …) untouched.
+ENV NGINX_ENVSUBST_FILTER=BACKEND_URL
+
 # nginx.conf.template uses ${BACKEND_URL}; the official nginx image applies
 # envsubst automatically on files in /etc/nginx/templates/ at startup.
 COPY apps/frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
