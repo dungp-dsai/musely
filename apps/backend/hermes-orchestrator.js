@@ -30,7 +30,7 @@ const HERMES_PORT = Number(process.env.HERMES_PORT) || 8642;
 const IDLE_MINUTES = Number(process.env.HERMES_IDLE_MINUTES) || 15;
 const USER_MEMORY_MB = Number(process.env.HERMES_USER_MEMORY_MB) || 2048;
 const USER_CPUS = Number(process.env.HERMES_USER_CPUS) || 1;
-const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 90_000;
+const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 180_000;
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -265,9 +265,19 @@ async function waitForHealth(machineId, signal) {
   let lastErr = null;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error("aborted");
+
+    const state = await getMachineState(machineId);
+    if (state === "stopped" || state === "destroyed") {
+      throw new Error(
+        `Hermes machine exited before becoming healthy (state=${state}). ` +
+          `Check: flyctl logs -a ${FLY_AGENT_APP} --machine ${machineId}`
+      );
+    }
+
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (res.ok) return true;
+      lastErr = new Error(`HTTP ${res.status}`);
     } catch (err) {
       lastErr = err;
     }
@@ -315,7 +325,11 @@ export function ensureInstance(userId) {
   if (inflight.has(userId)) return inflight.get(userId);
 
   const p = (async () => {
+    const t0 = Date.now();
+    const logStep = (step) => console.log(`[orchestrator] ensure user=${userId} +${Date.now() - t0}ms ${step}`);
+
     let instance = await provisionInstance(userId);
+    logStep("provisioned");
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
     const state = await getMachineState(machineId);
@@ -340,8 +354,10 @@ export function ensureInstance(userId) {
     }
     // state === "started" → already running, fall through to health check
 
-    await waitForMachineState(machineId, "started", 60);
+    await waitForMachineState(machineId, "started", 120);
+    logStep(`machine started (${machineId})`);
     await waitForHealth(machineId);
+    logStep("healthy");
     await touchInstance(userId);
 
     return {

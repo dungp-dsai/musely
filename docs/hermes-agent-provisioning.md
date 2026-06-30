@@ -139,6 +139,38 @@ const machine = await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines`, {
 
 Hermes data (cron jobs, etc.) lives under `/opt/data` on that volume.
 
+## Troubleshooting slow `/api/hermes/instance/ensure`
+
+Typical timing (healthy path):
+
+| Step | Duration |
+|------|----------|
+| Create volume + machine (first user) | 5–30s |
+| `waitForMachineState(started)` | VM boot ~1–5s |
+| `waitForHealth` (Hermes s6 + API server) | 30–120s cold start |
+| **Total first boot** | **~1–3 min** |
+
+If it runs the full **~3 min** then fails with `fetch failed`, the agent process is **not listening on :8642** — not a slow network.
+
+### Common failure: s6-overlay crash on Fly
+
+Agent logs show:
+
+```
+s6-overlay-suexec: fatal: can only run as pid 1
+Main child exited normally with code: 100
+```
+
+Fly marks the VM `started` in ~1s, but Hermes never boots. The backend then polls `/health` for up to 3 minutes → `fetch failed`.
+
+**Fix:** `apps/agent/Dockerfile` uses `unshare` so Hermes `/init` runs as PID 1 inside a nested namespace. Redeploy the **agent** image via CI (`push staging`).
+
+After redeploy, destroy any broken user machine and retry login:
+
+```bash
+flyctl machines destroy <machine-id> -a musely-staging-agent --force
+```
+
 ## Start + health check
 
 After create, `ensureInstance` starts the machine and waits for health:
