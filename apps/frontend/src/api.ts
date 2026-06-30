@@ -29,6 +29,13 @@ const json = async (res: Response) => {
 };
 
 export const api = {
+  joinWaitlist: (email: string): Promise<{ ok: boolean; alreadyJoined: boolean; emailed: boolean }> =>
+    apiFetch("/api/waitlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }).then(json),
+
   me: (): Promise<User> => apiFetch("/api/auth/me").then(json),
 
   logout: (): Promise<{ ok: boolean }> =>

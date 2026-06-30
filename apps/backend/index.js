@@ -55,7 +55,8 @@ import {
   startIdleReaper,
   ORCHESTRATOR_SETTINGS,
 } from "./hermes-orchestrator.js";
-import { listInstances, getInstance } from "./db.js";
+import { listInstances, getInstance, addWaitlistEmail } from "./db.js";
+import { sendWaitlistConfirmation, emailConfigured } from "./email.js";
 import {
   googleAuthUrl,
   exchangeGoogleCode,
@@ -109,6 +110,38 @@ app.get("/api/config", (_req, res) => {
             (k) => !(k === "MACHINES_API_TOKEN" ? process.env.MACHINES_API_TOKEN || process.env.FLY_API_TOKEN : process.env[k])
           ),
   });
+});
+
+// ---------- Waiting list (public) ----------
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post("/api/waitlist", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !EMAIL_RE.test(email) || email.length > 254) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+
+    const { created } = await addWaitlistEmail(email, "landing");
+
+    // Confirm via Resend. Never fail the signup if the email send hiccups —
+    // the address is already safely stored.
+    let emailed = false;
+    if (created && emailConfigured()) {
+      try {
+        await sendWaitlistConfirmation(email);
+        emailed = true;
+      } catch (err) {
+        console.error("[waitlist] confirmation email failed:", err.message);
+      }
+    }
+
+    res.json({ ok: true, alreadyJoined: !created, emailed });
+  } catch (err) {
+    console.error("[waitlist]", err);
+    res.status(500).json({ error: "Something went wrong. Please try again." });
+  }
 });
 
 // ---------- Auth ----------

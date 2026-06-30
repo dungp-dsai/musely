@@ -73,6 +73,14 @@ CREATE TABLE IF NOT EXISTS ai_task_chat (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Pre-launch waiting list signups.
+CREATE TABLE IF NOT EXISTS waitlist (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  email       TEXT NOT NULL UNIQUE,
+  source      TEXT NOT NULL DEFAULT 'landing',
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 -- Per-user Hermes agent instance registry (Fly Machines orchestrator).
 -- machine_name keeps the historical "container_name" public API shape.
 CREATE TABLE IF NOT EXISTS hermes_instances (
@@ -94,3 +102,4 @@ CREATE INDEX IF NOT EXISTS idx_ai_task_work_task ON ai_task_work(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_job_reports_post ON ai_job_reports(post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_task_chat_task ON ai_task_chat(task_id);
 CREATE INDEX IF NOT EXISTS idx_hermes_instances_active ON hermes_instances(last_active_at);
+CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);

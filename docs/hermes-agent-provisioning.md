@@ -165,6 +165,21 @@ Fly marks the VM `started` in ~1s, but Hermes never boots. The backend then poll
 
 **Fix:** `apps/agent/Dockerfile` uses `unshare` so Hermes `/init` runs as PID 1 inside a nested namespace. Redeploy the **agent** image via CI (`push staging`).
 
+### Common failure: interactive CLI exits immediately
+
+Agent logs show:
+
+```
+Warning: Input is not a terminal (fd=0).
+Goodbye!
+Main child exited normally with code: 0
+machine restart policy set to 'no', not restarting
+```
+
+The default Hermes Docker CMD runs the interactive TUI (`hermes`), which exits when stdin is not a TTY. User machines must run `hermes gateway run` so the OpenAI-compatible API server listens on `:8642`.
+
+**Fix:** `apps/agent/Dockerfile` sets `CMD ["hermes", "gateway", "run", ...]` and `hermes-orchestrator.js` sets the same `init.cmd` on dynamically created machines. Redeploy the **agent** image, then destroy broken user machines and retry login.
+
 After redeploy, destroy any broken user machine and retry login:
 
 ```bash

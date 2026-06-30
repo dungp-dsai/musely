@@ -4,6 +4,7 @@ import PostView from "./components/PostView";
 import HermesChat from "./components/HermesChat";
 import CronSettings from "./pages/CronSettings";
 import LoginPage from "./pages/LoginPage";
+import WaitlistPage from "./pages/WaitlistPage";
 import HermesBootScreen from "./components/HermesBootScreen";
 import { useAuth } from "./auth/AuthContext";
 import { useHermesBoot } from "./hooks/useHermesBoot";
@@ -21,6 +22,7 @@ export default function App() {
   const [post, setPost] = useState<Post | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -116,7 +118,11 @@ export default function App() {
             {authError}
           </div>
         )}
-        <LoginPage />
+        {showLogin ? (
+          <LoginPage onBack={() => setShowLogin(false)} />
+        ) : (
+          <WaitlistPage onSignIn={() => setShowLogin(true)} />
+        )}
       </>
     );
   }

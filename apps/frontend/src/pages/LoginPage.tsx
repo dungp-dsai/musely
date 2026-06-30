@@ -1,18 +1,23 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
-export default function LoginPage() {
+export default function LoginPage({ onBack }: { onBack?: () => void }) {
   const loginUrl = `${API_BASE}/api/auth/google`;
 
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="login-mark">H</div>
-        <h1>Writer</h1>
-        <p>Sign in to manage your drafts and chat with Hermes.</p>
+        <div className="login-mark">M</div>
+        <h1>Welcome back</h1>
+        <p>Sign in to manage your drafts and write with Musely.</p>
         <a className="btn btn-primary login-google" href={loginUrl}>
           <GoogleIcon />
           Continue with Google
         </a>
+        {onBack && (
+          <button type="button" className="login-back" onClick={onBack}>
+            ← Back to waiting list
+          </button>
+        )}
       </div>
     </div>
   );

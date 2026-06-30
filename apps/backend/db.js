@@ -48,6 +48,24 @@ export async function getUserById(id) {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) ?? null;
 }
 
+// ---------- Waiting list ----------
+
+// Returns { row, created }. created=false means the email was already on the list.
+export async function addWaitlistEmail(email, source = "landing") {
+  const normalized = String(email || "").trim().toLowerCase();
+  const existing = db.prepare("SELECT * FROM waitlist WHERE email = ?").get(normalized);
+  if (existing) return { row: existing, created: false };
+  const { lastInsertRowid } = db
+    .prepare("INSERT INTO waitlist (email, source) VALUES (?, ?)")
+    .run(normalized, source || "landing");
+  const row = db.prepare("SELECT * FROM waitlist WHERE id = ?").get(Number(lastInsertRowid));
+  return { row, created: true };
+}
+
+export async function countWaitlist() {
+  return db.prepare("SELECT COUNT(*) AS n FROM waitlist").get()?.n ?? 0;
+}
+
 // ---------- Hermes instances (Fly Machines orchestrator registry) ----------
 
 export async function getInstance(userId) {

@@ -22,7 +22,11 @@ ENV API_SERVER_ENABLED=true \
 #   "s6-overlay-suexec: fatal: can only run as pid 1"
 # Fix: in a nested PID namespace, Hermes /init becomes PID 1.
 # When run under real Docker locally ($$ == 1), skip unshare.
-ENTRYPOINT ["sh", "-c", "if [ \"$$\" -eq 1 ]; then exec /init /opt/hermes/docker/main-wrapper.sh; else exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh; fi"]
+# "$@" forwards CMD / Fly init.cmd to main-wrapper (default `hermes` is interactive TUI).
+ENTRYPOINT ["sh", "-c", "if [ \"$$\" -eq 1 ]; then exec /init /opt/hermes/docker/main-wrapper.sh \"$@\"; else exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh \"$@\"; fi", "musely-entrypoint"]
+
+# Headless gateway + OpenAI-compatible API server on :8642 (not interactive `hermes` TUI).
+CMD ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks"]
 
 EXPOSE 8642
 

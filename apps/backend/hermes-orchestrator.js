@@ -32,6 +32,9 @@ const USER_MEMORY_MB = Number(process.env.HERMES_USER_MEMORY_MB) || 2048;
 const USER_CPUS = Number(process.env.HERMES_USER_CPUS) || 1;
 const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 180_000;
 
+// Headless gateway + API server (default image CMD is interactive `hermes` TUI).
+const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks"];
+
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
 
@@ -147,6 +150,9 @@ function machineConfig({ volumeId, apiKey, userId }) {
     image: FLY_AGENT_IMAGE,
     env,
     mounts: [{ volume: volumeId, path: "/opt/data" }],
+    init: {
+      cmd: GATEWAY_CMD,
+    },
     restart: { policy: "no" },
     guest: {
       cpu_kind: "shared",
@@ -180,6 +186,18 @@ async function startMachine(machineId) {
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
 }
 
+/** Patch stopped machines that still use the interactive default CMD. */
+async function ensureMachineGatewayCmd(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) return;
+  const current = machine.config.init?.cmd;
+  if (JSON.stringify(current) === JSON.stringify(GATEWAY_CMD)) return;
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: { ...machine.config, init: { ...machine.config.init, cmd: GATEWAY_CMD } },
+    skip_launch: true,
+  });
+}
+
 async function stopMachine(machineId) {
   try {
     await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/stop`, {
@@ -191,11 +209,26 @@ async function stopMachine(machineId) {
   }
 }
 
-async function waitForMachineState(machineId, state, timeoutSec = 60) {
-  await flyRequest(
-    "GET",
-    `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/wait?state=${state}&timeout=${timeoutSec}`
-  );
+const FLY_WAIT_MAX_SEC = 60; // Fly Machines API: WaitMachineRequest.Timeout must be in [1s, 60s]
+
+async function waitForMachineState(machineId, state, totalTimeoutSec = 60) {
+  const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
+  while (Date.now() < deadline) {
+    const remainingSec = Math.ceil((deadline - Date.now()) / 1000);
+    const chunkSec = Math.min(FLY_WAIT_MAX_SEC, Math.max(1, remainingSec));
+    try {
+      await flyRequest(
+        "GET",
+        `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/wait?state=${state}&timeout=${chunkSec}`
+      );
+      return;
+    } catch (err) {
+      const msg = err.message || "";
+      const timedOut =
+        msg.includes("timeout") || msg.includes("408") || msg.includes("deadline exceeded");
+      if (!timedOut || Date.now() >= deadline) throw err;
+    }
+  }
 }
 
 // ---------- Exported orchestrator primitives ----------
@@ -347,9 +380,11 @@ export function ensureInstance(userId) {
     } else if (state === "created") {
       // skip_launch leftovers or mid-provision — /start rejects "created"; launch via update.
       await setInstanceStatus(userId, "starting");
+      await ensureMachineGatewayCmd(machineId);
       await launchMachine(machineId);
     } else if (state === "stopped") {
       await setInstanceStatus(userId, "starting");
+      await ensureMachineGatewayCmd(machineId);
       await startMachine(machineId);
     }
     // state === "started" → already running, fall through to health check
