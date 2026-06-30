@@ -31,17 +31,38 @@ if [[ -z "$APP" ]]; then
   exit 1
 fi
 
+# flyctl apps show is NOT a valid command (it prints help and exits 0).
+# Use status -a or apps list to check existence.
 app_exists() {
-  flyctl apps show "$APP" >/dev/null 2>&1
+  flyctl status -a "$APP" >/dev/null 2>&1
+}
+
+app_listed() {
+  flyctl apps list --json 2>/dev/null \
+    | grep -qE "\"Name\"[[:space:]]*:[[:space:]]*\"${APP}\""
+}
+
+wait_for_app() {
+  local attempt
+  for attempt in $(seq 1 24); do
+    if app_exists || app_listed; then
+      echo "Fly app ready: $APP"
+      return 0
+    fi
+    echo "Waiting for app $APP to appear ($attempt/24)..."
+    sleep 5
+  done
+  echo "error: app $APP not visible after create" >&2
+  exit 1
 }
 
 volume_exists() {
   local vol="$1"
   flyctl volumes list -a "$APP" --json 2>/dev/null \
-    | grep -q "\"name\":\"${vol}\""
+    | grep -qE "\"name\"[[:space:]]*:[[:space:]]*\"${vol}\""
 }
 
-if app_exists; then
+if app_exists || app_listed; then
   echo "Fly app exists: $APP"
 else
   echo "Creating Fly app: $APP"
@@ -49,7 +70,14 @@ else
   if [[ -n "${FLY_ORG:-}" ]]; then
     CREATE_ARGS+=(--org "$FLY_ORG")
   fi
-  flyctl "${CREATE_ARGS[@]}"
+  flyctl "${CREATE_ARGS[@]}" || {
+    if ! app_exists && ! app_listed; then
+      echo "error: failed to create app $APP" >&2
+      exit 1
+    fi
+    echo "Fly app $APP already exists (parallel create)"
+  }
+  wait_for_app
 fi
 
 # Create any [[mounts]] volumes declared in fly.toml (e.g. backend SQLite volume).
