@@ -7,7 +7,8 @@ primary_region = "sin"
   dockerfile = "../../apps/frontend/Dockerfile"
 
 [env]
-  BACKEND_URL = "http://musely-prod-backend.internal:8081"
+  # Fly internal proxy on port 80 — do not append :8081 (see fly-staging/frontend/fly.toml).
+  BACKEND_URL = "http://musely-prod-backend.internal"
 
 [http_service]
   internal_port        = 8080

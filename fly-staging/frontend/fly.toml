@@ -7,9 +7,9 @@ primary_region = "sin"
   dockerfile = "../../apps/frontend/Dockerfile"
 
 [env]
-  # nginx.conf.template substitutes ${BACKEND_URL} at container startup.
-  # Using the internal Fly hostname keeps traffic inside Fly's private network.
-  BACKEND_URL = "http://musely-staging-backend.internal:8081"
+  # Fly internal proxy (port 80) → backend internal_port 8081. Do NOT use :8081 here
+  # (that hits the machine 6PN IP directly and gets connection refused).
+  BACKEND_URL = "http://musely-staging-backend.internal"
 
 [http_service]
   internal_port        = 8080
