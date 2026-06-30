@@ -4,7 +4,7 @@ app = "musely-prod-agent"
 primary_region = "sin"
 
 [build]
-  dockerfile = "apps/agent/Dockerfile"
+  dockerfile = "../../apps/agent/Dockerfile"
 
 [env]
   API_SERVER_HOST = "0.0.0.0"

@@ -4,7 +4,7 @@ app = "musely-prod-frontend"
 primary_region = "sin"
 
 [build]
-  dockerfile = "apps/frontend/Dockerfile"
+  dockerfile = "../../apps/frontend/Dockerfile"
 
 [env]
   BACKEND_URL = "http://musely-prod-backend.internal:8081"

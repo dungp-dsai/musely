@@ -8,7 +8,7 @@ app = "musely-staging-agent"
 primary_region = "sin"
 
 [build]
-  dockerfile = "apps/agent/Dockerfile"
+  dockerfile = "../../apps/agent/Dockerfile"
 
 # Each dynamically-created user machine receives its own env at creation time
 # (API_SERVER_KEY, AGENT_USER_ID, etc.) — see hermes-orchestrator.js.

@@ -4,7 +4,7 @@ app = "musely-staging-backend"
 primary_region = "sin"
 
 [build]
-  dockerfile = "apps/backend/Dockerfile"
+  dockerfile = "../../apps/backend/Dockerfile"
 
 [env]
   NODE_ENV          = "production"

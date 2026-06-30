@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Deploy a Fly app from the monorepo root (correct Docker build context).
 #
-# fly.toml lives under fly-staging/ or fly-prod/, but Dockerfiles COPY from
-# apps/* paths relative to the repo root. Always deploy with context = root.
+# fly.toml lives under fly-staging/ or fly-prod/. Paths in fly.toml (dockerfile)
+# are relative to that fly.toml file. Docker COPY paths assume build context
+# is the repo root — pass "." as the deploy working directory.
 #
 # Usage (from repo root):
 #   ./scripts/fly-deploy.sh fly-staging/backend/fly.toml --remote-only
@@ -19,16 +20,19 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
   exit 1
 fi
 
-DOCKERFILE="$(grep -m1 'dockerfile = ' "$CONFIG_PATH" | sed -E 's/^[[:space:]]*dockerfile[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
-if [[ -z "$DOCKERFILE" || "$DOCKERFILE" == *dockerfile* ]]; then
+CONFIG_DIR="$(dirname "$CONFIG_PATH")"
+DOCKERFILE_REL="$(grep -m1 'dockerfile = ' "$CONFIG_PATH" | sed -E 's/^[[:space:]]*dockerfile[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+if [[ -z "$DOCKERFILE_REL" || "$DOCKERFILE_REL" == *dockerfile* ]]; then
   echo "error: could not read dockerfile from $CONFIG_PATH" >&2
   exit 1
 fi
 
-if [[ ! -f "$ROOT/$DOCKERFILE" ]]; then
-  echo "error: dockerfile not found: $ROOT/$DOCKERFILE" >&2
+# fly.toml dockerfile paths are relative to the fly.toml directory.
+DOCKERFILE_ABS="$(cd "$CONFIG_DIR" && cd "$(dirname "$DOCKERFILE_REL")" && echo "$(pwd)/$(basename "$DOCKERFILE_REL")")"
+if [[ ! -f "$DOCKERFILE_ABS" ]]; then
+  echo "error: dockerfile not found: $DOCKERFILE_ABS" >&2
   exit 1
 fi
 
-echo "Deploying with context=$ROOT dockerfile=$DOCKERFILE config=$CONFIG"
-exec flyctl deploy "$ROOT" --config "$CONFIG_PATH" --dockerfile "$DOCKERFILE" "$@"
+echo "Deploying with context=$ROOT dockerfile=$DOCKERFILE_ABS config=$CONFIG"
+exec flyctl deploy "$ROOT" --config "$CONFIG_PATH" --dockerfile "$DOCKERFILE_ABS" "$@"
