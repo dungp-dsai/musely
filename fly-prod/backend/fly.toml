@@ -29,7 +29,7 @@ primary_region = "sin"
 
 [http_service]
   internal_port        = 8081
-  force_https          = true
+  force_https          = false   # flycast is HTTP-only; frontend terminates TLS
   auto_stop_machines   = "stop"
   auto_start_machines  = true
   min_machines_running = 1
