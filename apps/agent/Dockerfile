@@ -1,6 +1,5 @@
 # Musely per-user Hermes agent image.
 #
-# This wraps the upstream Hermes agent and adds Musely-specific defaults.
 # Each user gets their own Fly Machine running this image with an isolated
 # /opt/data volume and a unique API key injected at machine-create time.
 #
@@ -13,15 +12,27 @@
 ARG HERMES_BASE=nousresearch/hermes-agent:latest
 FROM ${HERMES_BASE}
 
-# Sensible defaults — all can be overridden by env vars injected at machine
-# creation time (see hermes-orchestrator.js createMachine).
 ENV API_SERVER_ENABLED=true \
-    API_SERVER_HOST=0.0.0.0 \
+    API_SERVER_HOST=:: \
     API_SERVER_PORT=8642 \
-    GATEWAY_ALLOW_ALL_USERS=true
+    GATEWAY_ALLOW_ALL_USERS=true \
+    HERMES_GATEWAY_NO_SUPERVISE=1
+
+COPY apps/agent/016-musely-foreground-gateway /etc/cont-init.d/016-musely-foreground-gateway
+RUN chmod 755 /etc/cont-init.d/016-musely-foreground-gateway
+
+# Hermes uses s6-overlay (/init must be PID 1). Fly Machines runs Fly's /init as
+# PID 1 and spawns the image entrypoint as a child — s6 then fails with:
+#   "s6-overlay-suexec: fatal: can only run as pid 1"
+# Fix: in a nested PID namespace, Hermes /init becomes PID 1.
+# When run under real Docker locally ($$ == 1), skip unshare.
+# "$@" forwards CMD / Fly init.cmd to main-wrapper (default `hermes` is interactive TUI).
+ENTRYPOINT ["sh", "-c", "if [ \"$$\" -eq 1 ]; then exec /init /opt/hermes/docker/main-wrapper.sh \"$@\"; else exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh \"$@\"; fi", "musely-entrypoint"]
+
+# Headless gateway + OpenAI-compatible API server on :8642 (not interactive `hermes` TUI).
+CMD ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"]
 
 EXPOSE 8642
 
-# Health endpoint exposed by the Hermes gateway.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=5 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=5 \
   CMD wget -qO- http://127.0.0.1:${API_SERVER_PORT:-8642}/health >/dev/null 2>&1 || exit 1

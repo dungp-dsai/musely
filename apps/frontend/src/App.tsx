@@ -3,7 +3,8 @@ import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
 import HermesChat from "./components/HermesChat";
 import CronSettings from "./pages/CronSettings";
-import LoginPage from "./pages/LoginPage";
+import WaitlistPage from "./pages/WaitlistPage";
+import AdminPage from "./pages/AdminPage";
 import HermesBootScreen from "./components/HermesBootScreen";
 import { useAuth } from "./auth/AuthContext";
 import { useHermesBoot } from "./hooks/useHermesBoot";
@@ -11,6 +12,9 @@ import { api } from "./api";
 import type { Post, PostSummary, PostStatus } from "./types";
 
 type View = "writer" | "chat" | "settings";
+
+const isAdminRoute = () =>
+  window.location.pathname.replace(/\/+$/, "").toLowerCase() === "/admin";
 
 export default function App() {
   const { user, loading, logout } = useAuth();
@@ -20,14 +24,20 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [post, setPost] = useState<Post | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [landingNotice, setLandingNotice] = useState<string | null>(null);
+  const [adminRoute] = useState(isAdminRoute);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("auth") === "failed") {
-      setAuthError("Google sign-in failed. Check OAuth credentials and try again.");
-      window.history.replaceState({}, "", window.location.pathname);
+    const auth = params.get("auth");
+    if (auth === "not_approved") {
+      setLandingNotice(
+        "That email isn't approved yet. Join the waiting list below — we'll email you the moment you're in."
+      );
+    } else if (auth === "failed") {
+      setLandingNotice("Google sign-in failed. Please try again.");
     }
+    if (auth) window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
   const loadPosts = useCallback(async () => {
@@ -97,27 +107,30 @@ export default function App() {
     }
   };
 
+  if (adminRoute) {
+    return <AdminPage />;
+  }
+
   if (loading) {
     return (
       <div className="login-page">
         <div className="login-card">
-          <div className="login-mark">H</div>
+          <div className="login-mark">M</div>
           <p className="login-loading">Loading…</p>
         </div>
       </div>
     );
   }
 
+  // Pre-launch: everyone lands on the waiting list. Only admin-approved emails
+  // get a session from the Google OAuth callback, so any signed-out visitor —
+  // approved or not — sees this page until they successfully sign in.
   if (!user) {
     return (
-      <>
-        {authError && (
-          <div className="error-bar login-error" onClick={() => setAuthError(null)}>
-            {authError}
-          </div>
-        )}
-        <LoginPage />
-      </>
+      <WaitlistPage
+        notice={landingNotice}
+        onDismissNotice={() => setLandingNotice(null)}
+      />
     );
   }
 

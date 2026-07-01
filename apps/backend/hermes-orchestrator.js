@@ -30,7 +30,10 @@ const HERMES_PORT = Number(process.env.HERMES_PORT) || 8642;
 const IDLE_MINUTES = Number(process.env.HERMES_IDLE_MINUTES) || 15;
 const USER_MEMORY_MB = Number(process.env.HERMES_USER_MEMORY_MB) || 2048;
 const USER_CPUS = Number(process.env.HERMES_USER_CPUS) || 1;
-const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 90_000;
+const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 180_000;
+
+// Headless gateway + API server (default image CMD is interactive `hermes` TUI).
+const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -132,38 +135,76 @@ async function createVolume(userId) {
   return vol.id;
 }
 
-async function createMachine({ machineName, volumeId, apiKey, userId }) {
+function machineConfig({ volumeId, apiKey, userId }) {
   const env = {
     API_SERVER_ENABLED: "true",
-    API_SERVER_HOST: "0.0.0.0",
+    API_SERVER_HOST: "::",
     API_SERVER_PORT: String(HERMES_PORT),
     API_SERVER_KEY: apiKey,
     API_SERVER_MODEL_NAME: process.env.HERMES_API_MODEL_NAME || "Hermes Agent",
     AGENT_USER_ID: String(userId),
+    HERMES_GATEWAY_NO_SUPERVISE: "1",
   };
   if (process.env.AGENT_API_KEY) env.AGENT_API_KEY = process.env.AGENT_API_KEY;
 
+  return {
+    image: FLY_AGENT_IMAGE,
+    env,
+    mounts: [{ volume: volumeId, path: "/opt/data" }],
+    init: {
+      cmd: GATEWAY_CMD,
+    },
+    restart: { policy: "no" },
+    guest: {
+      cpu_kind: "shared",
+      cpus: USER_CPUS,
+      memory_mb: USER_MEMORY_MB,
+    },
+  };
+}
+
+async function createMachine({ machineName, volumeId, apiKey, userId }) {
   const machine = await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines`, {
     name: machineName,
     region: FLY_AGENT_REGION,
-    config: {
-      image: FLY_AGENT_IMAGE,
-      env,
-      mounts: [{ volume: volumeId, path: "/opt/data" }],
-      restart: { policy: "no" },
-      guest: {
-        cpu_kind: "shared",
-        cpus: USER_CPUS,
-        memory_mb: USER_MEMORY_MB,
-      },
-    },
-    skip_launch: true,
+    config: machineConfig({ volumeId, apiKey, userId }),
+    // Boot on create. skip_launch leaves machines in "created" where /start does not work.
   });
   return machine;
 }
 
+/** /start only works from "stopped". Machines in "created" must be launched via update. */
+async function launchMachine(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) throw new Error("Machine config missing");
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: machine.config,
+    skip_launch: false,
+  });
+}
+
 async function startMachine(machineId) {
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
+}
+
+/** Patch stopped machines missing foreground-gateway settings. */
+async function ensureMachineGatewayCmd(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) return;
+  const current = machine.config.init?.cmd;
+  const env = machine.config.env || {};
+  const needsCmd = JSON.stringify(current) !== JSON.stringify(GATEWAY_CMD);
+  const needsEnv =
+    env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
+  if (!needsCmd && !needsEnv) return;
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: {
+      ...machine.config,
+      env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
+      init: { ...machine.config.init, cmd: GATEWAY_CMD },
+    },
+    skip_launch: true,
+  });
 }
 
 async function stopMachine(machineId) {
@@ -177,11 +218,26 @@ async function stopMachine(machineId) {
   }
 }
 
-async function waitForMachineState(machineId, state, timeoutSec = 60) {
-  await flyRequest(
-    "GET",
-    `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/wait?state=${state}&timeout=${timeoutSec}`
-  );
+const FLY_WAIT_MAX_SEC = 60; // Fly Machines API: WaitMachineRequest.Timeout must be in [1s, 60s]
+
+async function waitForMachineState(machineId, state, totalTimeoutSec = 60) {
+  const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
+  while (Date.now() < deadline) {
+    const remainingSec = Math.ceil((deadline - Date.now()) / 1000);
+    const chunkSec = Math.min(FLY_WAIT_MAX_SEC, Math.max(1, remainingSec));
+    try {
+      await flyRequest(
+        "GET",
+        `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/wait?state=${state}&timeout=${chunkSec}`
+      );
+      return;
+    } catch (err) {
+      const msg = err.message || "";
+      const timedOut =
+        msg.includes("timeout") || msg.includes("408") || msg.includes("deadline exceeded");
+      if (!timedOut || Date.now() >= deadline) throw err;
+    }
+  }
 }
 
 // ---------- Exported orchestrator primitives ----------
@@ -251,9 +307,19 @@ async function waitForHealth(machineId, signal) {
   let lastErr = null;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error("aborted");
+
+    const state = await getMachineState(machineId);
+    if (state === "stopped" || state === "destroyed") {
+      throw new Error(
+        `Hermes machine exited before becoming healthy (state=${state}). ` +
+          `Check: flyctl logs -a ${FLY_AGENT_APP} --machine ${machineId}`
+      );
+    }
+
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (res.ok) return true;
+      lastErr = new Error(`HTTP ${res.status}`);
     } catch (err) {
       lastErr = err;
     }
@@ -301,13 +367,17 @@ export function ensureInstance(userId) {
   if (inflight.has(userId)) return inflight.get(userId);
 
   const p = (async () => {
+    const t0 = Date.now();
+    const logStep = (step) => console.log(`[orchestrator] ensure user=${userId} +${Date.now() - t0}ms ${step}`);
+
     let instance = await provisionInstance(userId);
+    logStep("provisioned");
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
     const state = await getMachineState(machineId);
 
     if (state === "destroyed" || state === "missing") {
-      // Machine was deleted externally; recreate it (volume persists).
+      // Machine was deleted externally; recreate it (volume persists). Boots on create.
       const user = await getUserById(userId);
       const newName = machineNameForUser(userId, user?.name);
       const volumeId = (await findExistingVolume(userId)) || (await createVolume(userId));
@@ -316,15 +386,22 @@ export function ensureInstance(userId) {
       machineId = newMachine.id;
       machineName = newName;
       await setInstanceStatus(userId, "starting");
-      await startMachine(machineId);
-    } else if (state === "stopped" || state === "created") {
+    } else if (state === "created") {
+      // skip_launch leftovers or mid-provision — /start rejects "created"; launch via update.
       await setInstanceStatus(userId, "starting");
+      await ensureMachineGatewayCmd(machineId);
+      await launchMachine(machineId);
+    } else if (state === "stopped") {
+      await setInstanceStatus(userId, "starting");
+      await ensureMachineGatewayCmd(machineId);
       await startMachine(machineId);
     }
     // state === "started" → already running, fall through to health check
 
-    await waitForMachineState(machineId, "started", 60);
+    await waitForMachineState(machineId, "started", 120);
+    logStep(`machine started (${machineId})`);
     await waitForHealth(machineId);
+    logStep("healthy");
     await touchInstance(userId);
 
     return {

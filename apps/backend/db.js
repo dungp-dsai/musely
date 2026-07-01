@@ -21,6 +21,19 @@ export function initDb() {
   db.exec("PRAGMA foreign_keys = ON");
   const schema = readFileSync(join(__dirname, "db", "schema.sql"), "utf8");
   db.exec(schema);
+  runMigrations();
+}
+
+// Idempotent, additive migrations for databases created before a column existed.
+function runMigrations() {
+  const waitlistCols = db.prepare("PRAGMA table_info(waitlist)").all();
+  const hasCol = (name) => waitlistCols.some((c) => c.name === name);
+  if (!hasCol("approved")) {
+    db.exec("ALTER TABLE waitlist ADD COLUMN approved INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasCol("approved_at")) {
+    db.exec("ALTER TABLE waitlist ADD COLUMN approved_at TEXT");
+  }
 }
 
 function nowIso() {
@@ -46,6 +59,65 @@ export async function upsertGoogleUser({ googleId, email, name, picture }) {
 
 export async function getUserById(id) {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) ?? null;
+}
+
+// ---------- Waiting list ----------
+
+// Returns { row, created }. created=false means the email was already on the list.
+export async function addWaitlistEmail(email, source = "landing") {
+  const normalized = String(email || "").trim().toLowerCase();
+  const existing = db.prepare("SELECT * FROM waitlist WHERE email = ?").get(normalized);
+  if (existing) return { row: existing, created: false };
+  const { lastInsertRowid } = db
+    .prepare("INSERT INTO waitlist (email, source) VALUES (?, ?)")
+    .run(normalized, source || "landing");
+  const row = db.prepare("SELECT * FROM waitlist WHERE id = ?").get(Number(lastInsertRowid));
+  return { row, created: true };
+}
+
+export async function countWaitlist() {
+  return db.prepare("SELECT COUNT(*) AS n FROM waitlist").get()?.n ?? 0;
+}
+
+export async function listWaitlist() {
+  return db
+    .prepare("SELECT * FROM waitlist ORDER BY approved ASC, created_at DESC")
+    .all();
+}
+
+export async function getWaitlistRow(id) {
+  return db.prepare("SELECT * FROM waitlist WHERE id = ?").get(id) ?? null;
+}
+
+export async function setWaitlistApproval(id, approved) {
+  const row = db
+    .prepare(
+      `UPDATE waitlist
+       SET approved = ?, approved_at = ?
+       WHERE id = ?
+       RETURNING *`
+    )
+    .get(approved ? 1 : 0, approved ? nowIso() : null, id);
+  return row ?? null;
+}
+
+// Emails listed in APPROVED_EMAILS are always allowed (owner/admin bootstrap),
+// even if they never joined the waiting list.
+function envApprovedEmails() {
+  return new Set(
+    String(process.env.APPROVED_EMAILS || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+export async function isEmailApproved(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (envApprovedEmails().has(normalized)) return true;
+  const row = db.prepare("SELECT approved FROM waitlist WHERE email = ?").get(normalized);
+  return Boolean(row?.approved);
 }
 
 // ---------- Hermes instances (Fly Machines orchestrator registry) ----------

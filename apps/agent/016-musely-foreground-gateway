@@ -1,0 +1,34 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Musely runs the gateway as the container main process (gateway run
+# --no-supervise). Hermes reconcile (02-reconcile-profiles) auto-starts an
+# s6-supervised gateway when gateway_state.json says "running" — which
+# happens after any successful boot. On the next start that races the
+# foreground gateway and the machine exits with code 1.
+#
+# Runs after 01-hermes-setup / 015-supervise-perms, before 02-reconcile-profiles.
+case "${HERMES_GATEWAY_NO_SUPERVISE:-}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) exit 0 ;;
+esac
+
+HERMES_HOME="${HERMES_HOME:-/opt/data}"
+/opt/hermes/.venv/bin/python - <<'PY'
+import json, os, time
+from pathlib import Path
+
+home = Path(os.environ.get("HERMES_HOME", "/opt/data"))
+state = home / "gateway_state.json"
+state.write_text(
+    json.dumps(
+        {
+            "gateway_state": "stopped",
+            "desired_state": "stopped",
+            "timestamp": int(time.time()),
+            "musely": "foreground-gateway-reset",
+        }
+    )
+    + "\n"
+)
+print("[musely] reset gateway_state.json to stopped (foreground gateway mode)")
+PY

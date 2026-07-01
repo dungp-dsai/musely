@@ -55,7 +55,24 @@ import {
   startIdleReaper,
   ORCHESTRATOR_SETTINGS,
 } from "./hermes-orchestrator.js";
-import { listInstances, getInstance } from "./db.js";
+import {
+  listInstances,
+  getInstance,
+  addWaitlistEmail,
+  listWaitlist,
+  getWaitlistRow,
+  setWaitlistApproval,
+  isEmailApproved,
+} from "./db.js";
+import { sendWaitlistConfirmation, sendWaitlistApproval, emailConfigured } from "./email.js";
+import {
+  adminConfigured,
+  verifyAdminCredentials,
+  setAdminCookie,
+  clearAdminCookie,
+  isAdminRequest,
+  requireAdmin,
+} from "./admin.js";
 import {
   googleAuthUrl,
   exchangeGoogleCode,
@@ -111,6 +128,118 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
+// ---------- Waiting list (public) ----------
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post("/api/waitlist", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !EMAIL_RE.test(email) || email.length > 254) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+
+    const { created } = await addWaitlistEmail(email, "landing");
+
+    // Confirm via Resend. Never fail the signup if the email send hiccups —
+    // the address is already safely stored.
+    let emailed = false;
+    if (created && emailConfigured()) {
+      try {
+        await sendWaitlistConfirmation(email);
+        emailed = true;
+      } catch (err) {
+        console.error("[waitlist] confirmation email failed:", err.message);
+      }
+    }
+
+    res.json({ ok: true, alreadyJoined: !created, emailed });
+  } catch (err) {
+    console.error("[waitlist]", err);
+    res.status(500).json({ error: "Something went wrong. Please try again." });
+  }
+});
+
+// ---------- Admin panel ----------
+
+app.get("/api/admin/me", (req, res) => {
+  res.json({ authenticated: isAdminRequest(req), configured: adminConfigured() });
+});
+
+app.post("/api/admin/login", (req, res) => {
+  if (!adminConfigured()) {
+    return res.status(503).json({ error: "Admin panel is not configured (set ADMIN_PASSWORD)." });
+  }
+  const { username, password } = req.body || {};
+  if (!verifyAdminCredentials(username, password)) {
+    return res.status(401).json({ error: "Invalid credentials." });
+  }
+  setAdminCookie(res);
+  res.json({ ok: true });
+});
+
+app.post("/api/admin/logout", (_req, res) => {
+  clearAdminCookie(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/waitlist", requireAdmin, async (_req, res) => {
+  try {
+    const entries = await listWaitlist();
+    res.json({
+      entries: entries.map((e) => ({
+        id: e.id,
+        email: e.email,
+        approved: Boolean(e.approved),
+        source: e.source,
+        createdAt: e.created_at,
+        approvedAt: e.approved_at,
+      })),
+      emailConfigured: emailConfigured(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/waitlist/:id/approve", requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const existing = await getWaitlistRow(id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+
+    const wasApproved = Boolean(existing.approved);
+    const row = await setWaitlistApproval(id, true);
+
+    // Notify the user on first approval only (best-effort).
+    let emailed = false;
+    if (!wasApproved && emailConfigured()) {
+      try {
+        await sendWaitlistApproval(row.email);
+        emailed = true;
+      } catch (err) {
+        console.error("[admin] approval email failed:", err.message);
+      }
+    }
+
+    res.json({ ok: true, emailed, entry: { id: row.id, email: row.email, approved: true } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/waitlist/:id/revoke", requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const existing = await getWaitlistRow(id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const row = await setWaitlistApproval(id, false);
+    res.json({ ok: true, entry: { id: row.id, email: row.email, approved: false } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- Auth ----------
 
 app.get("/api/auth/me", async (req, res) => {
@@ -142,6 +271,9 @@ app.get("/api/auth/google/callback", async (req, res) => {
     }
     res.clearCookie("oauth_state", { path: "/" });
     const user = await exchangeGoogleCode(String(code));
+    if (!(await isEmailApproved(user.email))) {
+      return res.redirect(`${CLIENT_URL}?auth=not_approved`);
+    }
     setSessionCookie(res, user.id);
     res.redirect(CLIENT_URL);
   } catch (err) {
