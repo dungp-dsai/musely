@@ -143,6 +143,7 @@ function machineConfig({ volumeId, apiKey, userId }) {
     API_SERVER_KEY: apiKey,
     API_SERVER_MODEL_NAME: process.env.HERMES_API_MODEL_NAME || "Hermes Agent",
     AGENT_USER_ID: String(userId),
+    HERMES_GATEWAY_NO_SUPERVISE: "1",
   };
   if (process.env.AGENT_API_KEY) env.AGENT_API_KEY = process.env.AGENT_API_KEY;
 
@@ -186,14 +187,22 @@ async function startMachine(machineId) {
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
 }
 
-/** Patch stopped machines that still use the interactive default CMD. */
+/** Patch stopped machines missing foreground-gateway settings. */
 async function ensureMachineGatewayCmd(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) return;
   const current = machine.config.init?.cmd;
-  if (JSON.stringify(current) === JSON.stringify(GATEWAY_CMD)) return;
+  const env = machine.config.env || {};
+  const needsCmd = JSON.stringify(current) !== JSON.stringify(GATEWAY_CMD);
+  const needsEnv =
+    env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
+  if (!needsCmd && !needsEnv) return;
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: { ...machine.config, init: { ...machine.config.init, cmd: GATEWAY_CMD } },
+    config: {
+      ...machine.config,
+      env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
+      init: { ...machine.config.init, cmd: GATEWAY_CMD },
+    },
     skip_launch: true,
   });
 }

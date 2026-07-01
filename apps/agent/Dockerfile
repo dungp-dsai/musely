@@ -15,7 +15,11 @@ FROM ${HERMES_BASE}
 ENV API_SERVER_ENABLED=true \
     API_SERVER_HOST=:: \
     API_SERVER_PORT=8642 \
-    GATEWAY_ALLOW_ALL_USERS=true
+    GATEWAY_ALLOW_ALL_USERS=true \
+    HERMES_GATEWAY_NO_SUPERVISE=1
+
+COPY apps/agent/016-musely-foreground-gateway /etc/cont-init.d/016-musely-foreground-gateway
+RUN chmod 755 /etc/cont-init.d/016-musely-foreground-gateway
 
 # Hermes uses s6-overlay (/init must be PID 1). Fly Machines runs Fly's /init as
 # PID 1 and spawns the image entrypoint as a child — s6 then fails with:
