@@ -92,6 +92,26 @@ import {
 } from "./auth.js";
 import { requireUser, requireUserOrAgent, publicUserId } from "./middleware/auth.js";
 import { syncPlatformForAllUsers, platformConfigured } from "./musely-agent-platform-sync.js";
+import { normalizeSyncSections } from "./musely-agent-platform-sync-runner.js";
+import {
+  listPlatformFiles,
+  readPlatformFile,
+  writePlatformFile,
+} from "./musely-agent-platform-files.js";
+import {
+  setPlatformSecret,
+  deletePlatformSecret,
+  seedPlatformSecretsFromEnv,
+  platformSecretsPreview,
+} from "./musely-agent-platform-env.js";
+import {
+  listPlatformSkills,
+  readPlatformSkill,
+  createPlatformSkill,
+  updatePlatformSkill,
+  deletePlatformSkill,
+} from "./musely-agent-platform-skills.js";
+import { ensurePlatformDir } from "./musely-agent-platform-init.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8081;
@@ -252,12 +272,113 @@ app.post("/api/admin/waitlist/:id/revoke", requireAdmin, async (req, res) => {
 
 app.post("/api/admin/musely-agent/sync-platform", requireAdmin, async (req, res) => {
   try {
+    const sections = normalizeSyncSections(req.body?.sections);
     const result = await syncPlatformForAllUsers({
       restart: req.body?.restart !== false,
+      sections,
     });
     res.json({ ok: true, platformConfigured: platformConfigured(), ...result });
   } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/musely-agent/platform/files", requireAdmin, (_req, res) => {
+  try {
+    res.json(listPlatformFiles());
+  } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/musely-agent/platform/secrets", requireAdmin, (_req, res) => {
+  try {
+    res.json(platformSecretsPreview());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/admin/musely-agent/platform/secrets", requireAdmin, (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.secrets) ? req.body.secrets : [];
+    const saved = [];
+    for (const item of items) {
+      if (!item?.key) continue;
+      if (item.delete) {
+        deletePlatformSecret(item.key);
+        saved.push({ key: item.key, deleted: true });
+      } else if (item.value) {
+        setPlatformSecret(item.key, item.value);
+        saved.push({ key: item.key, saved: true });
+      }
+    }
+    res.json({ ok: true, saved });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/musely-agent/platform/skills", requireAdmin, (_req, res) => {
+  try {
+    res.json({ skills: listPlatformSkills() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/musely-agent/platform/skills", requireAdmin, (req, res) => {
+  try {
+    const skill = createPlatformSkill({
+      id: req.body?.id,
+      content: req.body?.content,
+    });
+    res.status(201).json(skill);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/musely-agent/platform/skills/:id", requireAdmin, (req, res) => {
+  try {
+    res.json(readPlatformSkill(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/admin/musely-agent/platform/skills/:id", requireAdmin, (req, res) => {
+  try {
+    res.json(updatePlatformSkill(req.params.id, req.body?.content ?? ""));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/admin/musely-agent/platform/skills/:id", requireAdmin, (req, res) => {
+  try {
+    res.json(deletePlatformSkill(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/musely-agent/platform/file", requireAdmin, (req, res) => {
+  try {
+    const path = String(req.query.path || "");
+    res.json(readPlatformFile(path));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/admin/musely-agent/platform/file", requireAdmin, (req, res) => {
+  try {
+    const path = String(req.body?.path || "");
+    const content = req.body?.content ?? "";
+    res.json(writePlatformFile(path, content));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -699,6 +820,8 @@ app.post("/api/posts/:id/reports", requireUserOrAgent, (req, res) => {
 
 async function start() {
   initDb();
+  ensurePlatformDir();
+  seedPlatformSecretsFromEnv();
   startIdleReaper();
   app.listen(PORT, HOST, () => {
     console.log(`Musely API on http://${HOST}:${PORT}`);

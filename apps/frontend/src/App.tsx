@@ -23,10 +23,13 @@ const isAdminRoute = () =>
 export default function App() {
   const { user, loading, logout, refresh } = useAuth();
   const onboarded = Boolean(user?.onboarded);
-  const { phase: agentPhase, error: agentError, retry: retryAgent } = useMuselyAgentBoot(
-    user,
-    onboarded
-  );
+  const {
+    phase: agentPhase,
+    bootMode: agentBootMode,
+    error: agentError,
+    retry: retryAgent,
+    attempt: agentBootAttempt,
+  } = useMuselyAgentBoot(user, onboarded);
   const [view, setView] = useState<View>("feed");
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -151,8 +154,11 @@ export default function App() {
     return (
       <MuselyAgentBootScreen
         user={user}
+        phase={agentPhase}
+        bootMode={agentBootMode}
         error={agentPhase === "error" ? agentError : null}
         onRetry={agentPhase === "error" ? retryAgent : undefined}
+        bootKey={agentBootAttempt}
       />
     );
   }

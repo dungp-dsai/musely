@@ -127,3 +127,10 @@ CREATE INDEX IF NOT EXISTS idx_ai_job_reports_post ON ai_job_reports(post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_task_chat_task ON ai_task_chat(task_id);
 CREATE INDEX IF NOT EXISTS idx_feed_items_user ON feed_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);
+
+-- Admin-managed env vars synced into every user agent /opt/data/.env
+CREATE TABLE IF NOT EXISTS platform_secrets (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);

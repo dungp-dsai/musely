@@ -14,6 +14,7 @@ ENV NODE_ENV=production \
 
 COPY --from=deps /build/node_modules ./node_modules
 COPY apps/backend/ ./
+COPY musely-agent-platform/ /app/platform-defaults/
 
 EXPOSE 8081
 

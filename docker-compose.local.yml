@@ -16,7 +16,7 @@ services:
       - ./apps/backend:/app
       - backend_node_modules:/app/node_modules
       - ./data:/app/data
-      - ./musely-agent-platform:/opt/musely-agent-platform:ro
+      - ./musely-agent-platform:/opt/musely-agent-platform
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.env:/env/.env:ro
     environment:

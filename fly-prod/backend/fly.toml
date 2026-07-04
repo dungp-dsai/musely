@@ -18,6 +18,7 @@ primary_region = "sin"
   MUSELY_AGENT_IDLE_MINUTES = "30"
   MUSELY_AGENT_USER_MEMORY_MB = "2048"
   MUSELY_AGENT_USER_CPUS  = "1"
+  MUSELY_AGENT_PLATFORM_MOUNT = "/data/musely-agent-platform"
 
 # Secrets: copy fly-prod/backend/secrets.env.example → secrets.env, then import.
 
