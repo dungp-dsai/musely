@@ -20,6 +20,7 @@ primary_region = "sin"
   MUSELY_AGENT_IDLE_MINUTES = "15"
   MUSELY_AGENT_USER_MEMORY_MB = "2048"
   MUSELY_AGENT_USER_CPUS  = "1"
+  MUSELY_AGENT_PLATFORM_MOUNT = "/data/musely-agent-platform"
 
 # Secrets set via secrets.env (copy from secrets.env.example, then import):
 #   ./scripts/fly-secrets-import.sh fly-staging/backend

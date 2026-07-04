@@ -78,6 +78,76 @@ export const api = {
   adminRevoke: (id: number): Promise<{ ok: boolean }> =>
     apiFetch(`/api/admin/waitlist/${id}/revoke`, { method: "POST" }).then(json),
 
+  adminListPlatformFiles: (): Promise<{
+    root: string;
+    files: string[];
+    secrets: {
+      entries: { key: string; masked: string | null; hasValue: boolean }[];
+      note: string;
+    };
+  }> => apiFetch("/api/admin/musely-agent/platform/files").then(json),
+
+  adminReadPlatformFile: (path: string): Promise<{ path: string; content: string }> =>
+    apiFetch(`/api/admin/musely-agent/platform/file?path=${encodeURIComponent(path)}`).then(json),
+
+  adminWritePlatformFile: (
+    path: string,
+    content: string
+  ): Promise<{ path: string; bytes: number }> =>
+    apiFetch("/api/admin/musely-agent/platform/file", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content }),
+    }).then(json),
+
+  adminListPlatformSecrets: (): Promise<{
+    entries: { key: string; masked: string | null; hasValue: boolean }[];
+    note: string;
+  }> => apiFetch("/api/admin/musely-agent/platform/secrets").then(json),
+
+  adminSavePlatformSecrets: (
+    secrets: { key: string; value?: string; delete?: boolean }[]
+  ): Promise<{ ok: boolean; saved: { key: string; saved?: boolean; deleted?: boolean }[] }> =>
+    apiFetch("/api/admin/musely-agent/platform/secrets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secrets }),
+    }).then(json),
+
+  adminListPlatformSkills: (): Promise<{
+    skills: { id: string; hasSkillMd: boolean }[];
+  }> => apiFetch("/api/admin/musely-agent/platform/skills").then(json),
+
+  adminReadPlatformSkill: (
+    id: string
+  ): Promise<{ id: string; path: string; content: string }> =>
+    apiFetch(`/api/admin/musely-agent/platform/skills/${encodeURIComponent(id)}`).then(json),
+
+  adminCreatePlatformSkill: (data: {
+    id: string;
+    content: string;
+  }): Promise<{ id: string; path: string; content: string }> =>
+    apiFetch("/api/admin/musely-agent/platform/skills", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).then(json),
+
+  adminUpdatePlatformSkill: (
+    id: string,
+    content: string
+  ): Promise<{ id: string; path: string; bytes: number }> =>
+    apiFetch(`/api/admin/musely-agent/platform/skills/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    }).then(json),
+
+  adminDeletePlatformSkill: (id: string): Promise<{ id: string }> =>
+    apiFetch(`/api/admin/musely-agent/platform/skills/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }).then(json),
+
   me: (): Promise<User> => apiFetch("/api/auth/me").then(json),
 
   completeOnboarding: (topics: UserTopics): Promise<User> =>
@@ -229,8 +299,12 @@ export const api = {
       return body;
     }),
 
-  syncMuselyAgentPlatform: (): Promise<{
+  syncMuselyAgentPlatform: (options?: {
+    sections: ("config" | "skills" | "secrets")[];
+    restart?: boolean;
+  }): Promise<{
     ok: boolean;
+    sections: string[];
     total: number;
     synced: number;
     failed: number;
@@ -239,7 +313,10 @@ export const api = {
     apiFetch("/api/admin/musely-agent/sync-platform", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ restart: true }),
+      body: JSON.stringify({
+        sections: options?.sections ?? ["config", "skills", "secrets"],
+        restart: options?.restart !== false,
+      }),
     }).then(json),
 
   createCronJob: (data: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> =>

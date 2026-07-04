@@ -16,6 +16,15 @@ import {
   touchInstance,
   listIdleInstances,
 } from "./db.js";
+import {
+  buildPlatformSyncShell,
+  normalizeSyncSections,
+  needsPlatformFiles,
+} from "./musely-agent-platform-sync-runner.js";
+import {
+  resolvePlatformDirForFs,
+  resolvePlatformDirForDocker,
+} from "./musely-agent-platform-sync.js";
 
 const MUSELY_AGENT_IMAGE = process.env.MUSELY_AGENT_IMAGE || "musely-agent:local";
 const MUSELY_AGENT_NETWORK = process.env.MUSELY_AGENT_NETWORK || "musely-net";
@@ -86,82 +95,52 @@ export function orchestratorConfigured() {
   return existsSync("/var/run/docker.sock") && Boolean(MUSELY_AGENT_IMAGE);
 }
 
-const SYNC_SCRIPT = `set -eu
-DATA=/opt/data
-PLATFORM=/platform
-mkdir -p "$DATA/skills" "$DATA/sessions" "$DATA/memories"
-[ -f "$PLATFORM/config.yaml" ] && cp "$PLATFORM/config.yaml" "$DATA/config.yaml"
-[ -f "$PLATFORM/config.yaml.example" ] && [ ! -f "$DATA/config.yaml" ] && cp "$PLATFORM/config.yaml.example" "$DATA/config.yaml"
-[ -f "$PLATFORM/SOUL.md" ] && cp "$PLATFORM/SOUL.md" "$DATA/SOUL.md"
-if [ -d "$PLATFORM/skills/musely" ]; then rm -rf "$DATA/skills/musely"; cp -a "$PLATFORM/skills/musely" "$DATA/skills/musely"; fi
-ENV_FILE="$DATA/.env"
-touch "$ENV_FILE"
-for key in OPENROUTER_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GLM_API_KEY KIMI_API_KEY; do
-  eval "val=\\$$key"
-  [ -z "$val" ] && continue
-  tmp="$ENV_FILE.tmp"
-  grep -v "^$key=" "$ENV_FILE" > "$tmp" 2>/dev/null || : > "$tmp"
-  mv "$tmp" "$ENV_FILE"
-  printf '%s=%s\\n' "$key" "$val" >> "$ENV_FILE"
-done`;
-
-function platformDirForSync() {
-  return MUSELY_AGENT_PLATFORM_HOST_DIR || MUSELY_AGENT_PLATFORM_MOUNT;
-}
-
-const PLATFORM_ENV_KEYS = [
-  "OPENROUTER_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GLM_API_KEY",
-  "KIMI_API_KEY",
-];
-
-function platformEnvFlags() {
-  const flags = [];
-  for (const key of PLATFORM_ENV_KEYS) {
-    const val = process.env[key];
-    if (val) flags.push("-e", `${key}=${val}`);
+async function runPlatformSyncOnVolume(volumeName, sections) {
+  const normalized = normalizeSyncSections(sections);
+  const syncScript = buildPlatformSyncShell({
+    platformPath: "/platform",
+    dataPath: "/opt/data",
+    sections: normalized,
+  });
+  const args = ["run", "--rm"];
+  if (needsPlatformFiles(normalized)) {
+    const fsDir = resolvePlatformDirForFs();
+    if (!fsDir || !existsSync(fsDir)) {
+      throw new Error("musely-agent-platform/ is not configured or missing");
+    }
+    const platformDir = resolvePlatformDirForDocker();
+    if (!platformDir) {
+      throw new Error("MUSELY_AGENT_PLATFORM_HOST_DIR is not set");
+    }
+    args.push("-v", `${platformDir}:/platform:ro`);
   }
-  return flags;
-}
-
-async function runPlatformSyncOnVolume(volumeName) {
-  const platformDir = platformDirForSync();
-  if (!platformDir || !existsSync(platformDir)) {
-    throw new Error("MUSELY_AGENT_PLATFORM_HOST_DIR is not set or musely-agent-platform/ is missing");
-  }
-  const args = [
-    "run",
-    "--rm",
+  args.push(
     "-v",
     `${volumeName}:/opt/data`,
-    "-v",
-    `${platformDir}:/platform:ro`,
-    ...platformEnvFlags(),
     "alpine",
     "sh",
     "-c",
-    SYNC_SCRIPT,
-  ];
+    syncScript
+  );
   await docker(args, { timeoutMs: 300_000 });
 }
 
-/** Push musely-agent-platform into a user's Docker volume (always overwrites platform-owned paths). */
-export async function syncPlatformToUserVolume(userId) {
+/** Push selected platform parts into a user's Docker volume. */
+export async function syncPlatformToUserVolume(userId, { sections } = {}) {
   const volumeName = volumeNameForUser(userId);
   await ensureVolume(volumeName);
-  await runPlatformSyncOnVolume(volumeName);
+  await runPlatformSyncOnVolume(volumeName, sections);
   console.log(`[orchestrator:docker] platform sync → ${volumeName} (user=${userId})`);
 }
 
-export async function restartUserAgentIfRunning(userId) {
+export async function restartUserAgentIfRunning(userId, { sections } = {}) {
   const instance = await getInstance(userId);
   const ref = instance?.machine_name || instance?.machine_id;
   if (!ref) return;
   const state = await getContainerState(ref);
   if (state !== "started") return;
-  await docker(["exec", ref, "sh", "/opt/musely/platform/sync-platform-to-volume.sh"]);
+  const volumeName = volumeNameForUser(userId);
+  await runPlatformSyncOnVolume(volumeName, sections);
   await dockerQuiet(["exec", ref, "hermes", "gateway", "restart"]);
 }
 

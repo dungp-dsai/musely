@@ -1,43 +1,58 @@
 // Push Musely platform config/skills/.env into per-user agent volumes.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { listInstances } from "./db.js";
 import {
   orchestratorConfigured,
   syncPlatformToUserVolume,
   restartUserAgentIfRunning,
 } from "./musely-agent-orchestrator.js";
+import { getPlatformEnvMap, DEFAULT_PLATFORM_ENV_KEYS } from "./musely-agent-platform-env.js";
+import {
+  normalizeSyncSections,
+  needsPlatformFiles,
+  assertSecretsReadyForSync,
+} from "./musely-agent-platform-sync-runner.js";
 
-/** Env vars merged into each user's /opt/data/.env on sync (from backend secrets). */
-export const PLATFORM_ENV_KEYS = [
-  "OPENROUTER_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GLM_API_KEY",
-  "KIMI_API_KEY",
-];
+export { DEFAULT_PLATFORM_ENV_KEYS as PLATFORM_ENV_KEYS };
 
 export function platformEnvFlags() {
   const flags = [];
-  for (const key of PLATFORM_ENV_KEYS) {
-    const val = process.env[key];
-    if (val) flags.push("-e", `${key}=${val}`);
+  for (const [key, val] of Object.entries(getPlatformEnvMap())) {
+    flags.push("-e", `${key}=${val}`);
   }
   return flags;
 }
 
+/** Path visible to this Node process (admin read/write, config checks). */
+export function resolvePlatformDirForFs() {
+  const candidates = [
+    process.env.MUSELY_AGENT_PLATFORM_MOUNT,
+    process.env.MUSELY_AGENT_PLATFORM_HOST_DIR,
+    process.env.MUSELY_AGENT_PLATFORM_DIR,
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    const abs = resolve(dir);
+    if (existsSync(abs)) return abs;
+  }
+  return candidates[0] ? resolve(candidates[0]) : "";
+}
+
+/** Host path for `docker run -v` (Docker daemon path, not in-container mount). */
+export function resolvePlatformDirForDocker() {
+  const hostDir = process.env.MUSELY_AGENT_PLATFORM_HOST_DIR;
+  if (hostDir) return resolve(hostDir);
+  return resolvePlatformDirForFs();
+}
+
+/** @deprecated use resolvePlatformDirForFs */
 export function resolvePlatformDir() {
-  return (
-    process.env.MUSELY_AGENT_PLATFORM_HOST_DIR ||
-    process.env.MUSELY_AGENT_PLATFORM_DIR ||
-    process.env.MUSELY_AGENT_PLATFORM_MOUNT ||
-    ""
-  );
+  return resolvePlatformDirForFs();
 }
 
 export function platformConfigured() {
-  const dir = resolvePlatformDir();
+  const dir = resolvePlatformDirForFs();
   if (!dir || !existsSync(dir)) return false;
   return (
     existsSync(join(dir, "config.yaml")) ||
@@ -47,7 +62,7 @@ export function platformConfigured() {
 }
 
 export function readPlatformConfigYaml() {
-  const dir = resolvePlatformDir();
+  const dir = resolvePlatformDirForFs();
   if (!dir) return null;
   for (const name of ["config.yaml", "config.yaml.example"]) {
     const path = join(dir, name);
@@ -56,38 +71,42 @@ export function readPlatformConfigYaml() {
   return null;
 }
 
-/** Sync platform tree into one user's agent volume; optionally restart if running. */
-export async function syncPlatformForUser(userId, { restart = true } = {}) {
+/** Sync selected platform parts into one user's agent volume. */
+export async function syncPlatformForUser(userId, { restart = true, sections } = {}) {
   if (!orchestratorConfigured()) {
     throw new Error("Musely agent orchestrator is not configured");
   }
-  if (!platformConfigured()) {
+  const normalized = normalizeSyncSections(sections);
+  assertSecretsReadyForSync(normalized);
+  if (needsPlatformFiles(normalized) && !platformConfigured()) {
     throw new Error(
       "Platform directory not ready — add musely-agent-platform/config.yaml (see config.yaml.example)"
     );
   }
-  await syncPlatformToUserVolume(userId);
+  await syncPlatformToUserVolume(userId, { sections: normalized });
   if (restart) {
-    await restartUserAgentIfRunning(userId).catch((err) => {
+    await restartUserAgentIfRunning(userId, { sections: normalized }).catch((err) => {
       console.warn(`[platform-sync] restart user=${userId}: ${err.message}`);
     });
   }
 }
 
-/** Admin: sync all provisioned user volumes. */
-export async function syncPlatformForAllUsers({ restart = true } = {}) {
+/** Admin: sync selected parts to all provisioned user volumes. */
+export async function syncPlatformForAllUsers({ restart = true, sections } = {}) {
+  const normalized = normalizeSyncSections(sections);
   const instances = await listInstances();
   const results = [];
   for (const inst of instances) {
     const userId = inst.user_id;
     try {
-      await syncPlatformForUser(userId, { restart });
+      await syncPlatformForUser(userId, { restart, sections: normalized });
       results.push({ userId, email: inst.email, ok: true });
     } catch (err) {
       results.push({ userId, email: inst.email, ok: false, error: err.message });
     }
   }
   return {
+    sections: normalized,
     total: instances.length,
     synced: results.filter((r) => r.ok).length,
     failed: results.filter((r) => !r.ok).length,

@@ -15,6 +15,14 @@ import {
   touchInstance,
   listIdleInstances,
 } from "./db.js";
+import {
+  buildPlatformSyncShell,
+  createPlatformTarBuffer,
+  chunkBase64,
+  platformDirOrThrow,
+  normalizeSyncSections,
+  needsPlatformFiles,
+} from "./musely-agent-platform-sync-runner.js";
 
 // Fly strips FLY_API_TOKEN from app runtime (reserved for flyctl/CI). Use MACHINES_API_TOKEN.
 function machinesApiToken() {
@@ -188,11 +196,18 @@ async function createMachine({ machineName, volumeId, apiKey, userId }) {
   return machine;
 }
 
-/** Sync platform files from agent image into user volume (starts machine briefly if needed). */
-export async function syncPlatformToUserVolume(userId) {
+/** Sync selected platform parts from backend storage into user volume. */
+export async function syncPlatformToUserVolume(userId, { sections } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
   if (!machineId) throw new Error("No agent machine for user — provision first");
+
+  const normalized = normalizeSyncSections(sections);
+  const syncScript = buildPlatformSyncShell({
+    platformPath: "/tmp/musely-platform",
+    dataPath: "/opt/data",
+    sections: normalized,
+  });
 
   let started = false;
   const state = await getMachineState(machineId);
@@ -204,9 +219,38 @@ export async function syncPlatformToUserVolume(userId) {
     started = true;
   }
 
-  await execInContainer(machineId, ["sh", "/opt/musely/platform/sync-platform-to-volume.sh"], {
-    timeoutMs: 120_000,
-  });
+  if (needsPlatformFiles(normalized)) {
+    const platformDir = platformDirOrThrow();
+    const tarBuffer = await createPlatformTarBuffer(platformDir, normalized);
+    const chunks = chunkBase64(tarBuffer);
+
+    await execInContainer(machineId, [
+      "sh",
+      "-c",
+      "rm -rf /tmp/musely-platform /tmp/platform.tgz /tmp/platform.tgz.b64 && mkdir -p /tmp/musely-platform",
+    ]);
+
+    for (const chunk of chunks) {
+      const escaped = chunk.replace(/'/g, `'\\''`);
+      await execInContainer(machineId, [
+        "sh",
+        "-c",
+        `printf '%s' '${escaped}' >> /tmp/platform.tgz.b64`,
+      ]);
+    }
+
+    await execInContainer(
+      machineId,
+      [
+        "sh",
+        "-c",
+        "base64 -d /tmp/platform.tgz.b64 > /tmp/platform.tgz && tar -xzf /tmp/platform.tgz -C /tmp/musely-platform",
+      ],
+      { timeoutMs: 120_000 }
+    );
+  }
+
+  await execInContainer(machineId, ["sh", "-c", syncScript], { timeoutMs: 120_000 });
 
   if (started) {
     await stopMachine(machineId);
@@ -214,13 +258,13 @@ export async function syncPlatformToUserVolume(userId) {
   }
 }
 
-export async function restartUserAgentIfRunning(userId) {
+export async function restartUserAgentIfRunning(userId, { sections } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
   if (!machineId) return;
   const state = await getMachineState(machineId);
   if (!isMachineRunning(state)) return;
-  await execInContainer(machineId, ["sh", "/opt/musely/platform/sync-platform-to-volume.sh"]);
+  await syncPlatformToUserVolume(userId, { sections });
   await execInContainer(machineId, ["hermes", "gateway", "restart"]);
 }
 
