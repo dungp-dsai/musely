@@ -43,7 +43,32 @@ const HEALTH_TIMEOUT_MS = Number(process.env.MUSELY_AGENT_HEALTH_TIMEOUT_MS) || 
 
 // Headless gateway + API server (default image CMD is interactive `hermes` TUI).
 const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
+const GATEWAY_CMD_STR = GATEWAY_CMD.join(" ");
 const FLY_SYNC_IMAGE = process.env.FLY_SYNC_IMAGE || "alpine:3.20";
+
+/** Fly GET often returns init.cmd as one string; Machines spawn needs argv[]. */
+function normalizeInitCmd(cmd) {
+  if (Array.isArray(cmd) && cmd.length > 0) return cmd;
+  if (typeof cmd === "string") {
+    const trimmed = cmd.trim();
+    if (!trimmed) return GATEWAY_CMD;
+    if (trimmed === GATEWAY_CMD_STR) return GATEWAY_CMD;
+    if (trimmed === "sleep infinity" || trimmed === "sleep inf") return ["sleep", "infinity"];
+    return ["sh", "-c", cmd];
+  }
+  return GATEWAY_CMD;
+}
+
+/** Ensure agent machine config uses Hermes image + argv CMD (not a flattened string). */
+function normalizeAgentMachineConfig(config) {
+  const out = JSON.parse(JSON.stringify(config || {}));
+  out.image = out.image && out.image !== FLY_SYNC_IMAGE ? out.image : FLY_AGENT_IMAGE;
+  const init = { ...(out.init || {}) };
+  delete init.exec;
+  init.cmd = normalizeInitCmd(init.cmd);
+  out.init = init;
+  return out;
+}
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -237,7 +262,7 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     config: {
       image: FLY_SYNC_IMAGE,
       mounts: [{ volume: volumeId, path: "/opt/data" }],
-      init: { cmd: ["sleep", "infinity"] },
+      init: { exec: ["sleep", "inf"] },
       restart: { policy: "no" },
       guest:
         savedConfig.guest || {
@@ -300,7 +325,7 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     }
 
     await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-      config: savedConfig,
+      config: normalizeAgentMachineConfig(savedConfig),
       skip_launch: true,
     });
 
@@ -329,7 +354,7 @@ async function launchMachine(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) throw new Error("Machine config missing");
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: machine.config,
+    config: normalizeAgentMachineConfig(machine.config),
     skip_launch: false,
   });
 }
@@ -342,18 +367,17 @@ async function startMachine(machineId) {
 async function ensureMachineGatewayCmd(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) return;
-  const current = machine.config.init?.cmd;
+  const current = normalizeInitCmd(machine.config.init?.cmd);
   const env = machine.config.env || {};
   const needsCmd = JSON.stringify(current) !== JSON.stringify(GATEWAY_CMD);
   const needsEnv =
     env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
   if (!needsCmd && !needsEnv) return;
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: {
+    config: normalizeAgentMachineConfig({
       ...machine.config,
       env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
-      init: { ...machine.config.init, cmd: GATEWAY_CMD },
-    },
+    }),
     skip_launch: true,
   });
 }
