@@ -1,20 +1,40 @@
+import { useEffect, useState } from "react";
 import type { User } from "../api";
-import type { MuselyAgentBootPhase } from "../hooks/useMuselyAgentBoot";
+import {
+  computeBootProgress,
+  type MuselyAgentBootMode,
+  type MuselyAgentBootPhase,
+} from "../hooks/useMuselyAgentBoot";
 
 type Props = {
   user: User;
   phase?: MuselyAgentBootPhase;
+  bootMode?: MuselyAgentBootMode;
   error?: string | null;
   onRetry?: () => void;
+  bootKey?: number;
 };
 
 export default function MuselyAgentBootScreen({
   user,
   phase = "preparing",
+  bootMode = "first",
   error,
   onRetry,
+  bootKey = 0,
 }: Props) {
   const firstName = user.name?.split(/\s+/)[0]?.trim();
+  const [progress, setProgress] = useState(0);
+  const isWakeup = bootMode === "wakeup";
+
+  useEffect(() => {
+    if (error) return;
+    const start = Date.now();
+    const tick = () => setProgress(computeBootProgress(Date.now() - start, bootMode));
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [error, bootKey, bootMode]);
 
   if (error) {
     return (
@@ -35,8 +55,13 @@ export default function MuselyAgentBootScreen({
     );
   }
 
-  const statusLine =
-    phase === "checking" ? "Checking your workspace" : "Provisioning your agent";
+  const statusLine = isWakeup
+    ? phase === "checking"
+      ? "Checking your agent"
+      : "Waking up your agent"
+    : phase === "checking"
+      ? "Checking your workspace"
+      : "Provisioning your agent";
 
   return (
     <div className="boot-page">
@@ -45,14 +70,23 @@ export default function MuselyAgentBootScreen({
           M
         </div>
 
-        <h1 className="boot-title">
-          {firstName ? `Just for you, ${firstName}.` : "Just for you."}
-        </h1>
-
-        <p className="boot-lead">
-          We&apos;re setting up a Musely agent only for you.
-        </p>
-        <p className="boot-sub">It takes a while only the first time.</p>
+        {isWakeup ? (
+          <>
+            <h1 className="boot-title">Waking up your AI agent</h1>
+            <p className="boot-lead">It&apos;s just sleeping.</p>
+            <p className="boot-sub">It won&apos;t take long.</p>
+          </>
+        ) : (
+          <>
+            <h1 className="boot-title">
+              {firstName ? `Just for you, ${firstName}.` : "Just for you."}
+            </h1>
+            <p className="boot-lead">
+              We&apos;re setting up a Musely agent only for you.
+            </p>
+            <p className="boot-sub">It takes a while only the first time.</p>
+          </>
+        )}
 
         <div className="boot-status">
           <span className="boot-status-text">{statusLine}</span>
@@ -63,8 +97,18 @@ export default function MuselyAgentBootScreen({
           </span>
         </div>
 
-        <div className="boot-progress-track" aria-hidden>
-          <div className="boot-progress-fill" />
+        <p className="boot-progress-pct" aria-hidden>
+          {progress}%
+        </p>
+        <div
+          className="boot-progress-track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+          aria-label="Agent setup progress"
+        >
+          <div className="boot-progress-fill" style={{ width: `${progress}%` }} />
         </div>
       </div>
     </div>
