@@ -17,6 +17,7 @@ import {
 } from "./db.js";
 import {
   buildPlatformSyncShell,
+  buildPlatformSyncVerifyShell,
   createPlatformTarBuffer,
   chunkBase64,
   platformDirOrThrow,
@@ -42,6 +43,7 @@ const HEALTH_TIMEOUT_MS = Number(process.env.MUSELY_AGENT_HEALTH_TIMEOUT_MS) || 
 
 // Headless gateway + API server (default image CMD is interactive `hermes` TUI).
 const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
+const FLY_SYNC_IMAGE = process.env.FLY_SYNC_IMAGE || "alpine:3.20";
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -208,63 +210,117 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     dataPath: "/opt/data",
     sections: normalized,
   });
+  const verifyScript = buildPlatformSyncVerifyShell({
+    dataPath: "/opt/data",
+    sections: normalized,
+  });
 
-  let started = false;
-  const state = await getMachineState(machineId);
-  if (!isMachineRunning(state)) {
-    await ensureMachineGatewayCmd(machineId);
-    if (state === "created") await launchMachine(machineId);
-    else await startMachine(machineId);
-    await waitForMachineState(machineId, "started", 120);
-    started = true;
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) throw new Error("Machine config missing");
+  const savedConfig = JSON.parse(JSON.stringify(machine.config));
+  const volumeId = instance.volume_id || savedConfig.mounts?.[0]?.volume;
+  if (!volumeId) throw new Error("No volume attached to agent machine");
+
+  const initialState = machine.state || (await getMachineState(machineId));
+  const wasRunning = isMachineRunning(initialState);
+  const wasCreated = initialState === "created";
+
+  // Hermes entrypoint uses unshare(); Fly exec runs outside that namespace and writes
+  // to a throwaway /opt/data. Swap to Alpine with the same volume mount (like Docker's
+  // `docker run -v volume:/opt/data alpine`) so sync hits the real persistent volume.
+  if (wasRunning) {
+    await stopMachine(machineId);
+    await waitForMachineState(machineId, "stopped", 120);
   }
 
-  if (needsPlatformFiles(normalized)) {
-    const platformDir = platformDirOrThrow();
-    const tarBuffer = await createPlatformTarBuffer(platformDir, normalized);
-    const chunks = chunkBase64(tarBuffer);
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: {
+      image: FLY_SYNC_IMAGE,
+      mounts: [{ volume: volumeId, path: "/opt/data" }],
+      init: { cmd: ["sleep", "infinity"] },
+      restart: { policy: "no" },
+      guest:
+        savedConfig.guest || {
+          cpu_kind: "shared",
+          cpus: USER_CPUS,
+          memory_mb: USER_MEMORY_MB,
+        },
+    },
+    skip_launch: true,
+  });
 
-    await execInContainer(machineId, [
-      "sh",
-      "-c",
-      "rm -rf /tmp/musely-platform /tmp/platform.tgz /tmp/platform.tgz.b64 && mkdir -p /tmp/musely-platform",
-    ]);
+  if (wasCreated) await launchMachine(machineId);
+  else await startMachine(machineId);
+  await waitForMachineState(machineId, "started", 120);
 
-    for (const chunk of chunks) {
-      const escaped = chunk.replace(/'/g, `'\\''`);
+  try {
+    if (needsPlatformFiles(normalized)) {
+      const platformDir = platformDirOrThrow();
+      const tarBuffer = await createPlatformTarBuffer(platformDir, normalized);
+      const chunks = chunkBase64(tarBuffer);
+
       await execInContainer(machineId, [
         "sh",
         "-c",
-        `printf '%s' '${escaped}' >> /tmp/platform.tgz.b64`,
+        "rm -rf /tmp/musely-platform /tmp/platform.tgz /tmp/platform.tgz.b64 && mkdir -p /tmp/musely-platform",
       ]);
+
+      for (const chunk of chunks) {
+        const escaped = chunk.replace(/'/g, `'\\''`);
+        await execInContainer(machineId, [
+          "sh",
+          "-c",
+          `printf '%s' '${escaped}' >> /tmp/platform.tgz.b64`,
+        ]);
+      }
+
+      await execInContainer(
+        machineId,
+        [
+          "sh",
+          "-c",
+          "test -s /tmp/platform.tgz.b64 && " +
+            "(base64 -d /tmp/platform.tgz.b64 2>/dev/null || base64 -D /tmp/platform.tgz.b64) > /tmp/platform.tgz && " +
+            "test -s /tmp/platform.tgz && " +
+            "tar -xzf /tmp/platform.tgz -C /tmp/musely-platform",
+        ],
+        { timeoutMs: 120_000 }
+      );
     }
 
-    await execInContainer(
-      machineId,
-      [
-        "sh",
-        "-c",
-        "base64 -d /tmp/platform.tgz.b64 > /tmp/platform.tgz && tar -xzf /tmp/platform.tgz -C /tmp/musely-platform",
-      ],
-      { timeoutMs: 120_000 }
-    );
-  }
-
-  await execInContainer(machineId, ["sh", "-c", syncScript], { timeoutMs: 120_000 });
-
-  if (started) {
+    const out = await execInContainer(machineId, ["sh", "-c", syncScript], { timeoutMs: 120_000 });
+    console.log(`[orchestrator] platform sync user=${userId}: ${out.trim()}`);
+    await execInContainer(machineId, ["sh", "-c", verifyScript], { timeoutMs: 60_000 });
+  } finally {
     await stopMachine(machineId);
-    await setInstanceStatus(userId, "stopped");
+    try {
+      await waitForMachineState(machineId, "stopped", 120);
+    } catch {
+      /* best-effort */
+    }
+
+    await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+      config: savedConfig,
+      skip_launch: true,
+    });
+
+    if (wasRunning) {
+      if (wasCreated) await launchMachine(machineId);
+      else await startMachine(machineId);
+      await waitForMachineState(machineId, "started", 120);
+      await setInstanceStatus(userId, "running");
+    } else {
+      await setInstanceStatus(userId, "stopped");
+    }
   }
 }
 
-export async function restartUserAgentIfRunning(userId, { sections } = {}) {
+export async function restartUserAgentIfRunning(userId, { sections: _sections } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
   if (!machineId) return;
   const state = await getMachineState(machineId);
   if (!isMachineRunning(state)) return;
-  await syncPlatformToUserVolume(userId, { sections });
   await execInContainer(machineId, ["hermes", "gateway", "restart"]);
 }
 
