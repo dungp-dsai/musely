@@ -43,7 +43,77 @@ const HEALTH_TIMEOUT_MS = Number(process.env.MUSELY_AGENT_HEALTH_TIMEOUT_MS) || 
 
 // Headless gateway + API server (default image CMD is interactive `hermes` TUI).
 const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
+const GATEWAY_CMD_STR = GATEWAY_CMD.join(" ");
 const FLY_SYNC_IMAGE = process.env.FLY_SYNC_IMAGE || "alpine:3.20";
+
+/** Fly GET often returns init.cmd as one string; Machines spawn needs argv[]. */
+function normalizeInitCmd(cmd) {
+  if (Array.isArray(cmd) && cmd.length > 0) return cmd;
+  if (typeof cmd === "string") {
+    const trimmed = cmd.trim();
+    if (!trimmed) return GATEWAY_CMD;
+    if (trimmed === GATEWAY_CMD_STR) return GATEWAY_CMD;
+    if (trimmed === "sleep infinity" || trimmed === "sleep inf") return ["sleep", "infinity"];
+    return ["sh", "-c", cmd];
+  }
+  return GATEWAY_CMD;
+}
+
+/** Ensure agent machine config uses Hermes image + argv CMD (not a flattened string). */
+function normalizeAgentMachineConfig(config) {
+  const out = JSON.parse(JSON.stringify(config || {}));
+  out.image = out.image && out.image !== FLY_SYNC_IMAGE ? out.image : FLY_AGENT_IMAGE;
+  const init = { ...(out.init || {}) };
+  delete init.exec;
+  init.cmd = normalizeInitCmd(init.cmd);
+  out.init = init;
+  return out;
+}
+
+function machineNeedsHermesRepair(config) {
+  if (!config) return true;
+  const image = String(config.image || "");
+  if (image.includes("alpine") || image.endsWith(FLY_SYNC_IMAGE)) return true;
+  if (config.init?.exec) return true;
+  if (typeof config.init?.cmd === "string") return true;
+  return JSON.stringify(normalizeInitCmd(config.init?.cmd)) !== JSON.stringify(GATEWAY_CMD);
+}
+
+async function quickHealthCheck(machineId) {
+  const url = `http://${machineId}.vm.${FLY_AGENT_APP}.internal:${MUSELY_AGENT_PORT}/health`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Fix alpine / broken cmd left from old sync flows — stop + update config, never destroy. */
+async function repairHermesMachine(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config || !machineNeedsHermesRepair(machine.config)) return;
+
+  console.log(`[orchestrator] repairing machine ${machineId} (restore Hermes image/cmd)`);
+  const wasRunning = isMachineRunning(machine.state);
+  if (wasRunning) {
+    await stopMachine(machineId);
+    await waitForMachineState(machineId, "stopped", 120);
+  }
+
+  await updateMachineConfig(
+    machineId,
+    normalizeAgentMachineConfig({
+      ...machine.config,
+      env: {
+        ...(machine.config.env || {}),
+        API_SERVER_HOST: "::",
+        HERMES_GATEWAY_NO_SUPERVISE: "1",
+      },
+    }),
+    { launch: false }
+  );
+}
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -198,7 +268,8 @@ async function createMachine({ machineName, volumeId, apiKey, userId }) {
   return machine;
 }
 
-/** Sync selected platform parts from backend storage into user volume. */
+/** Sync selected platform parts from backend storage into user volume.
+ *  Never replaces or destroys the user machine — only stop/start + exec on the same machine ID. */
 export async function syncPlatformToUserVolume(userId, { sections } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
@@ -215,43 +286,15 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     sections: normalized,
   });
 
-  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
-  if (!machine?.config) throw new Error("Machine config missing");
-  const savedConfig = JSON.parse(JSON.stringify(machine.config));
-  const volumeId = instance.volume_id || savedConfig.mounts?.[0]?.volume;
-  if (!volumeId) throw new Error("No volume attached to agent machine");
-
-  const initialState = machine.state || (await getMachineState(machineId));
-  const wasRunning = isMachineRunning(initialState);
-  const wasCreated = initialState === "created";
-
-  // Hermes entrypoint uses unshare(); Fly exec runs outside that namespace and writes
-  // to a throwaway /opt/data. Swap to Alpine with the same volume mount (like Docker's
-  // `docker run -v volume:/opt/data alpine`) so sync hits the real persistent volume.
-  if (wasRunning) {
-    await stopMachine(machineId);
-    await waitForMachineState(machineId, "stopped", 120);
+  let startedForSync = false;
+  const state = await getMachineState(machineId);
+  if (!isMachineRunning(state)) {
+    await ensureMachineGatewayCmd(machineId);
+    if (state === "created") await launchMachine(machineId);
+    else await startMachine(machineId);
+    await waitForMachineState(machineId, "started", 120);
+    startedForSync = true;
   }
-
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: {
-      image: FLY_SYNC_IMAGE,
-      mounts: [{ volume: volumeId, path: "/opt/data" }],
-      init: { cmd: ["sleep", "infinity"] },
-      restart: { policy: "no" },
-      guest:
-        savedConfig.guest || {
-          cpu_kind: "shared",
-          cpus: USER_CPUS,
-          memory_mb: USER_MEMORY_MB,
-        },
-    },
-    skip_launch: true,
-  });
-
-  if (wasCreated) await launchMachine(machineId);
-  else await startMachine(machineId);
-  await waitForMachineState(machineId, "started", 120);
 
   try {
     if (needsPlatformFiles(normalized)) {
@@ -288,28 +331,13 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
       );
     }
 
-    const out = await execInContainer(machineId, ["sh", "-c", syncScript], { timeoutMs: 120_000 });
+    const out = await execOnAgentVolume(machineId, syncScript, { timeoutMs: 120_000 });
     console.log(`[orchestrator] platform sync user=${userId}: ${out.trim()}`);
-    await execInContainer(machineId, ["sh", "-c", verifyScript], { timeoutMs: 60_000 });
+    await execOnAgentVolume(machineId, verifyScript, { timeoutMs: 60_000 });
   } finally {
-    await stopMachine(machineId);
-    try {
+    if (startedForSync) {
+      await stopMachine(machineId);
       await waitForMachineState(machineId, "stopped", 120);
-    } catch {
-      /* best-effort */
-    }
-
-    await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-      config: savedConfig,
-      skip_launch: true,
-    });
-
-    if (wasRunning) {
-      if (wasCreated) await launchMachine(machineId);
-      else await startMachine(machineId);
-      await waitForMachineState(machineId, "started", 120);
-      await setInstanceStatus(userId, "running");
-    } else {
       await setInstanceStatus(userId, "stopped");
     }
   }
@@ -328,34 +356,55 @@ export async function restartUserAgentIfRunning(userId, { sections: _sections } 
 async function launchMachine(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) throw new Error("Machine config missing");
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: machine.config,
-    skip_launch: false,
+  await updateMachineConfig(machineId, normalizeAgentMachineConfig(machine.config), {
+    launch: true,
   });
+  await waitForMachineState(machineId, "started", 120);
 }
 
-async function startMachine(machineId) {
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
+async function startMachine(machineId, { retries = 8 } = {}) {
+  await waitForMachineStable(machineId, 120);
+  let lastErr;
+  for (let i = 0; i < retries; i++) {
+    try {
+      await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const msg = err.message || "";
+      if (
+        msg.includes("getting replaced") ||
+        msg.includes("412") ||
+        msg.includes("failed_precondition")
+      ) {
+        await flySleep(1500 * (i + 1));
+        await waitForMachineStable(machineId, 60);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr || new Error(`Failed to start machine ${machineId}`);
 }
 
 /** Patch stopped machines missing foreground-gateway settings. */
 async function ensureMachineGatewayCmd(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) return;
-  const current = machine.config.init?.cmd;
+  const current = normalizeInitCmd(machine.config.init?.cmd);
   const env = machine.config.env || {};
   const needsCmd = JSON.stringify(current) !== JSON.stringify(GATEWAY_CMD);
   const needsEnv =
     env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
   if (!needsCmd && !needsEnv) return;
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: {
+  await updateMachineConfig(
+    machineId,
+    normalizeAgentMachineConfig({
       ...machine.config,
       env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
-      init: { ...machine.config.init, cmd: GATEWAY_CMD },
-    },
-    skip_launch: true,
-  });
+    }),
+    { launch: false }
+  );
 }
 
 async function stopMachine(machineId) {
@@ -366,6 +415,47 @@ async function stopMachine(machineId) {
     });
   } catch {
     /* already stopped or destroyed */
+  }
+}
+
+const flySleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isTransitionalMachineState(state) {
+  return (
+    state === "replacing" ||
+    state === "replaced" ||
+    state === "starting" ||
+    state === "stopping" ||
+    state === "destroying"
+  );
+}
+
+/** Wait until Fly finishes a config replace / stop / start transition. */
+async function waitForMachineStable(machineId, totalTimeoutSec = 120) {
+  const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
+  while (Date.now() < deadline) {
+    const state = await getMachineState(machineId);
+    if (!isTransitionalMachineState(state)) return state;
+    await flySleep(1000);
+  }
+  throw new Error(`Machine ${machineId} stuck in transitional state`);
+}
+
+async function updateMachineConfig(machineId, config, { launch = false } = {}) {
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config,
+    skip_launch: !launch,
+  });
+  await waitForMachineStable(machineId, 120);
+  if (!launch) {
+    try {
+      await waitForMachineState(machineId, "stopped", 90);
+    } catch {
+      const state = await getMachineState(machineId);
+      if (state !== "stopped" && state !== "created") {
+        throw new Error(`Machine ${machineId} not quiescent after config update (state=${state})`);
+      }
+    }
   }
 }
 
@@ -422,6 +512,19 @@ export async function execInContainer(machineId, argv, opts = {}) {
     throw new Error(result?.stderr?.trim() || `exec exited with code ${result?.exit_code}`);
   }
   return result?.stdout || "";
+}
+
+/** Run shell on /opt/data via the same entrypoint stack as the gateway (not raw Fly exec). */
+async function execOnAgentVolume(machineId, shellScript, opts = {}) {
+  return execInContainer(
+    machineId,
+    [
+      "sh",
+      "-c",
+      `exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh sh -c ${shellQuoteSingle(shellScript)}`,
+    ],
+    opts
+  );
 }
 
 /**
@@ -542,7 +645,26 @@ export function ensureInstance(userId) {
     logStep("provisioned");
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
-    const state = await getMachineState(machineId);
+    let state = await getMachineState(machineId);
+    if (isTransitionalMachineState(state)) {
+      logStep(`waiting for machine (was ${state})`);
+      state = await waitForMachineStable(machineId, 180);
+    }
+
+    await repairHermesMachine(machineId);
+    state = await getMachineState(machineId);
+
+    if (state === "started" && (await quickHealthCheck(machineId))) {
+      logStep("already healthy");
+      await touchInstance(userId);
+      return {
+        baseUrl: baseUrlForMachine(machineId),
+        apiKey,
+        machineId,
+        machineName,
+        containerName: machineId,
+      };
+    }
 
     if (state === "destroyed" || state === "missing") {
       // Machine was deleted externally; recreate it (volume persists). Boots on create.
@@ -563,8 +685,9 @@ export function ensureInstance(userId) {
       await setInstanceStatus(userId, "starting");
       await ensureMachineGatewayCmd(machineId);
       await startMachine(machineId);
+    } else if (state === "started") {
+      logStep("started but not healthy yet — waiting for gateway");
     }
-    // state === "started" → already running, fall through to health check
 
     await waitForMachineState(machineId, "started", 120);
     logStep(`machine started (${machineId})`);
