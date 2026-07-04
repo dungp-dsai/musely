@@ -6,13 +6,15 @@ export type HermesBootPhase = "idle" | "checking" | "preparing" | "ready" | "err
 const POLL_MS = 4000;
 const MAX_POLLS = 90; // ~6 minutes (first provision can be slow)
 
-export function useHermesBoot(user: User | null) {
+export function useHermesBoot(user: User | null, enabled = true) {
   const [phase, setPhase] = useState<HermesBootPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!user) {
+    // Agent provisioning only starts once the user exists AND onboarding is
+    // done — we never create an agent before we know their topics.
+    if (!user || !enabled) {
       setPhase("idle");
       setError(null);
       return;
@@ -75,7 +77,7 @@ export function useHermesBoot(user: User | null) {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, attempt]);
+  }, [user?.id, enabled, attempt]);
 
   const retry = useCallback(() => {
     setAttempt((n) => n + 1);

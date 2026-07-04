@@ -74,3 +74,20 @@ export interface TaskThread {
   report: AiJobReport | null;
   messages: AiTaskChatMessage[];
 }
+
+export interface UserTopics {
+  interests: string;
+  write: string[];
+  read: string[];
+}
+
+export interface FeedItem {
+  id: number;
+  user_id: number;
+  topic: string;
+  kind: "read" | "write";
+  title: string;
+  summary: string;
+  url: string | null;
+  created_at: string;
+}

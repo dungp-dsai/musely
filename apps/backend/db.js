@@ -27,12 +27,21 @@ export function initDb() {
 // Idempotent, additive migrations for databases created before a column existed.
 function runMigrations() {
   const waitlistCols = db.prepare("PRAGMA table_info(waitlist)").all();
-  const hasCol = (name) => waitlistCols.some((c) => c.name === name);
-  if (!hasCol("approved")) {
+  const hasWaitlistCol = (name) => waitlistCols.some((c) => c.name === name);
+  if (!hasWaitlistCol("approved")) {
     db.exec("ALTER TABLE waitlist ADD COLUMN approved INTEGER NOT NULL DEFAULT 0");
   }
-  if (!hasCol("approved_at")) {
+  if (!hasWaitlistCol("approved_at")) {
     db.exec("ALTER TABLE waitlist ADD COLUMN approved_at TEXT");
+  }
+
+  const userCols = db.prepare("PRAGMA table_info(users)").all();
+  const hasUserCol = (name) => userCols.some((c) => c.name === name);
+  if (!hasUserCol("onboarded")) {
+    db.exec("ALTER TABLE users ADD COLUMN onboarded INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasUserCol("topics")) {
+    db.exec("ALTER TABLE users ADD COLUMN topics TEXT NOT NULL DEFAULT ''");
   }
 }
 
@@ -59,6 +68,52 @@ export async function upsertGoogleUser({ googleId, email, name, picture }) {
 
 export async function getUserById(id) {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) ?? null;
+}
+
+// Parse the stored topics JSON into a stable { interests, write, read } shape.
+// `interests` is the free-text description the user types during onboarding;
+// write/read arrays are kept for backward compatibility with older records.
+export function parseUserTopics(raw) {
+  const empty = { interests: "", write: [], read: [] };
+  if (!raw) return empty;
+  try {
+    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const clean = (arr) =>
+      Array.isArray(arr)
+        ? arr.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 30)
+        : [];
+    return {
+      interests: String(obj?.interests || "").trim().slice(0, 4000),
+      write: clean(obj?.write),
+      read: clean(obj?.read),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+// Public-safe user view returned to the browser.
+export function serializeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+    onboarded: Boolean(user.onboarded),
+    topics: parseUserTopics(user.topics),
+  };
+}
+
+// Persist the user's onboarding topic preferences and mark them onboarded.
+export async function setUserOnboarding(userId, topics) {
+  const payload = JSON.stringify(parseUserTopics(topics));
+  const row = db
+    .prepare(
+      `UPDATE users SET onboarded = 1, topics = ? WHERE id = ? RETURNING *`
+    )
+    .get(payload, userId);
+  return row ?? null;
 }
 
 // ---------- Waiting list ----------
@@ -528,6 +583,46 @@ export async function getTaskThread(taskId, userId) {
     .get(task.post_id);
 
   return { task, post, work, report, messages };
+}
+
+// ---------- Home feed ----------
+
+export async function listFeedItems(userId) {
+  return db
+    .prepare(
+      "SELECT * FROM feed_items WHERE user_id = ? ORDER BY created_at DESC, id DESC"
+    )
+    .all(userId);
+}
+
+export async function countFeedItems(userId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM feed_items WHERE user_id = ?").get(userId)?.n ?? 0;
+}
+
+export async function addFeedItems(userId, items) {
+  const insert = db.prepare(
+    `INSERT INTO feed_items (user_id, topic, kind, title, summary, url)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const inserted = [];
+  for (const item of items || []) {
+    const title = String(item?.title || "").trim();
+    if (!title) continue;
+    const { lastInsertRowid } = insert.run(
+      userId,
+      String(item?.topic || "").trim(),
+      item?.kind === "write" ? "write" : "read",
+      title,
+      String(item?.summary || "").trim(),
+      item?.url ? String(item.url).trim() : null
+    );
+    inserted.push(db.prepare("SELECT * FROM feed_items WHERE id = ?").get(Number(lastInsertRowid)));
+  }
+  return inserted;
+}
+
+export async function clearFeedItems(userId) {
+  db.prepare("DELETE FROM feed_items WHERE user_id = ?").run(userId);
 }
 
 export default db;

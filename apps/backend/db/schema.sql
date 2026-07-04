@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS users (
   email       TEXT NOT NULL UNIQUE,
   name        TEXT NOT NULL DEFAULT '',
   picture     TEXT,
+  -- First-run onboarding: 0 until the user picks their topic preferences.
+  onboarded   INTEGER NOT NULL DEFAULT 0,
+  -- JSON blob of the user's topic preferences: { "write": [...], "read": [...] }.
+  -- Collected only to personalize their feed and agent; never shared.
+  topics      TEXT NOT NULL DEFAULT '',
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -84,6 +89,20 @@ CREATE TABLE IF NOT EXISTS waitlist (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Personalized home feed. Populated when a user asks their agent to ingest
+-- content for their chosen topics. `kind` distinguishes reading material from
+-- writing prompts/ideas.
+CREATE TABLE IF NOT EXISTS feed_items (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic       TEXT NOT NULL DEFAULT '',
+  kind        TEXT NOT NULL DEFAULT 'read',
+  title       TEXT NOT NULL,
+  summary     TEXT NOT NULL DEFAULT '',
+  url         TEXT,
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 -- Per-user Hermes agent instance registry (Fly Machines orchestrator).
 -- machine_name keeps the historical "container_name" public API shape.
 CREATE TABLE IF NOT EXISTS hermes_instances (
@@ -105,4 +124,5 @@ CREATE INDEX IF NOT EXISTS idx_ai_task_work_task ON ai_task_work(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_job_reports_post ON ai_job_reports(post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_task_chat_task ON ai_task_chat(task_id);
 CREATE INDEX IF NOT EXISTS idx_hermes_instances_active ON hermes_instances(last_active_at);
+CREATE INDEX IF NOT EXISTS idx_feed_items_user ON feed_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);

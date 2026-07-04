@@ -18,8 +18,17 @@ import {
   listPendingFeedback,
   getTaskThread,
   addAiTaskChatMessage,
+  serializeUser,
+  setUserOnboarding,
+  parseUserTopics,
+  getUserById,
+  listFeedItems,
+  countFeedItems,
+  addFeedItems,
+  clearFeedItems,
 } from "./db.js";
 import { generateTaskChatReply } from "./task-chat.js";
+import { generateFeedItems } from "./feed.js";
 import {
   getActivePostPayload,
   getActiveTasksPayload,
@@ -245,13 +254,22 @@ app.post("/api/admin/waitlist/:id/revoke", requireAdmin, async (req, res) => {
 app.get("/api/auth/me", async (req, res) => {
   const user = await getUserFromRequest(req);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
-  res.json({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    picture: user.picture,
-  });
+  res.json(serializeUser(user));
 });
+
+// First-run onboarding: save the topics the user wants to write and read about,
+// then mark them onboarded. Only after this does the client provision the agent.
+app.post("/api/onboarding", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const topics = parseUserTopics({
+      interests: req.body?.interests ?? req.body?.topics?.interests,
+      write: req.body?.write ?? req.body?.topics?.write,
+      read: req.body?.read ?? req.body?.topics?.read,
+    });
+    await setUserOnboarding(req.user.id, topics);
+    return serializeUser(await getUserById(req.user.id));
+  })
+);
 
 app.get("/api/auth/google", (_req, res) => {
   try {
@@ -591,6 +609,38 @@ app.post("/api/feedback/:id/chat", requireUser, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ---------- Home feed (authenticated) ----------
+
+app.get("/api/feed", requireUser, (req, res) =>
+  asJson(res, () => listFeedItems(req.user.id))
+);
+
+// Ask the user's agent to ingest content for their chosen topics.
+app.post("/api/feed/ingest", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const user = await getUserById(req.user.id);
+    const topics = parseUserTopics(user?.topics);
+    const replace = req.body?.replace !== false;
+
+    const { items, source } = await generateFeedItems(topics);
+    if (replace) await clearFeedItems(req.user.id);
+    await addFeedItems(req.user.id, items);
+
+    return {
+      ok: true,
+      source,
+      items: await listFeedItems(req.user.id),
+    };
+  })
+);
+
+app.post("/api/feed/clear", requireUser, (req, res) =>
+  asJson(res, async () => {
+    await clearFeedItems(req.user.id);
+    return { ok: true, count: await countFeedItems(req.user.id) };
+  })
+);
 
 // ---------- Agent API (Hermes — session or X-Agent-Key) ----------
 

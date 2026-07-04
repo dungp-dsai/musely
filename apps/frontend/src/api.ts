@@ -1,4 +1,13 @@
-import type { Post, PostSummary, Version, Feedback, TaskThread, AiTaskChatMessage } from "./types";
+import type {
+  Post,
+  PostSummary,
+  Version,
+  Feedback,
+  TaskThread,
+  AiTaskChatMessage,
+  UserTopics,
+  FeedItem,
+} from "./types";
 import type { CronJob } from "./lib/cronTypes";
 
 export type User = {
@@ -6,6 +15,8 @@ export type User = {
   email: string;
   name: string;
   picture: string | null;
+  onboarded: boolean;
+  topics: UserTopics;
 };
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -68,6 +79,25 @@ export const api = {
     apiFetch(`/api/admin/waitlist/${id}/revoke`, { method: "POST" }).then(json),
 
   me: (): Promise<User> => apiFetch("/api/auth/me").then(json),
+
+  completeOnboarding: (topics: UserTopics): Promise<User> =>
+    apiFetch("/api/onboarding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(topics),
+    }).then(json),
+
+  getFeed: (): Promise<FeedItem[]> => apiFetch("/api/feed").then(json),
+
+  ingestFeed: (): Promise<{ ok: boolean; source: string; items: FeedItem[] }> =>
+    apiFetch("/api/feed/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ replace: true }),
+    }).then(json),
+
+  clearFeed: (): Promise<{ ok: boolean; count: number }> =>
+    apiFetch("/api/feed/clear", { method: "POST" }).then(json),
 
   logout: (): Promise<{ ok: boolean }> =>
     apiFetch("/api/auth/logout", { method: "POST" }).then(json),
