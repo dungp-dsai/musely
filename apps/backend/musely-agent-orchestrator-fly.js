@@ -223,7 +223,8 @@ async function createMachine({ machineName, volumeId, apiKey, userId }) {
   return machine;
 }
 
-/** Sync selected platform parts from backend storage into user volume. */
+/** Sync selected platform parts from backend storage into user volume.
+ *  Never replaces or destroys the user machine — only stop/start + exec on the same machine ID. */
 export async function syncPlatformToUserVolume(userId, { sections } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
@@ -240,43 +241,15 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     sections: normalized,
   });
 
-  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
-  if (!machine?.config) throw new Error("Machine config missing");
-  const savedConfig = JSON.parse(JSON.stringify(machine.config));
-  const volumeId = instance.volume_id || savedConfig.mounts?.[0]?.volume;
-  if (!volumeId) throw new Error("No volume attached to agent machine");
-
-  const initialState = machine.state || (await getMachineState(machineId));
-  const wasRunning = isMachineRunning(initialState);
-  const wasCreated = initialState === "created";
-
-  // Hermes entrypoint uses unshare(); Fly exec runs outside that namespace and writes
-  // to a throwaway /opt/data. Swap to Alpine with the same volume mount (like Docker's
-  // `docker run -v volume:/opt/data alpine`) so sync hits the real persistent volume.
-  if (wasRunning) {
-    await stopMachine(machineId);
-    await waitForMachineState(machineId, "stopped", 120);
+  let startedForSync = false;
+  const state = await getMachineState(machineId);
+  if (!isMachineRunning(state)) {
+    await ensureMachineGatewayCmd(machineId);
+    if (state === "created") await launchMachine(machineId);
+    else await startMachine(machineId);
+    await waitForMachineState(machineId, "started", 120);
+    startedForSync = true;
   }
-
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: {
-      image: FLY_SYNC_IMAGE,
-      mounts: [{ volume: volumeId, path: "/opt/data" }],
-      init: { exec: ["sleep", "inf"] },
-      restart: { policy: "no" },
-      guest:
-        savedConfig.guest || {
-          cpu_kind: "shared",
-          cpus: USER_CPUS,
-          memory_mb: USER_MEMORY_MB,
-        },
-    },
-    skip_launch: true,
-  });
-
-  if (wasCreated) await launchMachine(machineId);
-  else await startMachine(machineId);
-  await waitForMachineState(machineId, "started", 120);
 
   try {
     if (needsPlatformFiles(normalized)) {
@@ -313,28 +286,13 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
       );
     }
 
-    const out = await execInContainer(machineId, ["sh", "-c", syncScript], { timeoutMs: 120_000 });
+    const out = await execOnAgentVolume(machineId, syncScript, { timeoutMs: 120_000 });
     console.log(`[orchestrator] platform sync user=${userId}: ${out.trim()}`);
-    await execInContainer(machineId, ["sh", "-c", verifyScript], { timeoutMs: 60_000 });
+    await execOnAgentVolume(machineId, verifyScript, { timeoutMs: 60_000 });
   } finally {
-    await stopMachine(machineId);
-    try {
+    if (startedForSync) {
+      await stopMachine(machineId);
       await waitForMachineState(machineId, "stopped", 120);
-    } catch {
-      /* best-effort */
-    }
-
-    await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-      config: normalizeAgentMachineConfig(savedConfig),
-      skip_launch: true,
-    });
-
-    if (wasRunning) {
-      if (wasCreated) await launchMachine(machineId);
-      else await startMachine(machineId);
-      await waitForMachineState(machineId, "started", 120);
-      await setInstanceStatus(userId, "running");
-    } else {
       await setInstanceStatus(userId, "stopped");
     }
   }
@@ -353,14 +311,35 @@ export async function restartUserAgentIfRunning(userId, { sections: _sections } 
 async function launchMachine(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) throw new Error("Machine config missing");
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: normalizeAgentMachineConfig(machine.config),
-    skip_launch: false,
+  await updateMachineConfig(machineId, normalizeAgentMachineConfig(machine.config), {
+    launch: true,
   });
+  await waitForMachineState(machineId, "started", 120);
 }
 
-async function startMachine(machineId) {
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
+async function startMachine(machineId, { retries = 8 } = {}) {
+  await waitForMachineStable(machineId, 120);
+  let lastErr;
+  for (let i = 0; i < retries; i++) {
+    try {
+      await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const msg = err.message || "";
+      if (
+        msg.includes("getting replaced") ||
+        msg.includes("412") ||
+        msg.includes("failed_precondition")
+      ) {
+        await flySleep(1500 * (i + 1));
+        await waitForMachineStable(machineId, 60);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr || new Error(`Failed to start machine ${machineId}`);
 }
 
 /** Patch stopped machines missing foreground-gateway settings. */
@@ -373,13 +352,14 @@ async function ensureMachineGatewayCmd(machineId) {
   const needsEnv =
     env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
   if (!needsCmd && !needsEnv) return;
-  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
-    config: normalizeAgentMachineConfig({
+  await updateMachineConfig(
+    machineId,
+    normalizeAgentMachineConfig({
       ...machine.config,
       env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
     }),
-    skip_launch: true,
-  });
+    { launch: false }
+  );
 }
 
 async function stopMachine(machineId) {
@@ -390,6 +370,47 @@ async function stopMachine(machineId) {
     });
   } catch {
     /* already stopped or destroyed */
+  }
+}
+
+const flySleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isTransitionalMachineState(state) {
+  return (
+    state === "replacing" ||
+    state === "replaced" ||
+    state === "starting" ||
+    state === "stopping" ||
+    state === "destroying"
+  );
+}
+
+/** Wait until Fly finishes a config replace / stop / start transition. */
+async function waitForMachineStable(machineId, totalTimeoutSec = 120) {
+  const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
+  while (Date.now() < deadline) {
+    const state = await getMachineState(machineId);
+    if (!isTransitionalMachineState(state)) return state;
+    await flySleep(1000);
+  }
+  throw new Error(`Machine ${machineId} stuck in transitional state`);
+}
+
+async function updateMachineConfig(machineId, config, { launch = false } = {}) {
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config,
+    skip_launch: !launch,
+  });
+  await waitForMachineStable(machineId, 120);
+  if (!launch) {
+    try {
+      await waitForMachineState(machineId, "stopped", 90);
+    } catch {
+      const state = await getMachineState(machineId);
+      if (state !== "stopped" && state !== "created") {
+        throw new Error(`Machine ${machineId} not quiescent after config update (state=${state})`);
+      }
+    }
   }
 }
 
@@ -446,6 +467,19 @@ export async function execInContainer(machineId, argv, opts = {}) {
     throw new Error(result?.stderr?.trim() || `exec exited with code ${result?.exit_code}`);
   }
   return result?.stdout || "";
+}
+
+/** Run shell on /opt/data via the same entrypoint stack as the gateway (not raw Fly exec). */
+async function execOnAgentVolume(machineId, shellScript, opts = {}) {
+  return execInContainer(
+    machineId,
+    [
+      "sh",
+      "-c",
+      `exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh sh -c ${shellQuoteSingle(shellScript)}`,
+    ],
+    opts
+  );
 }
 
 /**
