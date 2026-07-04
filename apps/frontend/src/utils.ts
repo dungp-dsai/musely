@@ -1,11 +1,15 @@
-// SQLite stores timestamps as UTC "YYYY-MM-DD HH:MM:SS". Make them local + relative.
+// SQLite timestamps: ISO "YYYY-MM-DDTHH:MM:SS.sssZ" (current schema) or legacy "YYYY-MM-DD HH:MM:SS".
 export function parseUtc(ts: string): Date {
+  if (!ts) return new Date(NaN);
+  if (ts.includes("T")) return new Date(ts);
   return new Date(ts.replace(" ", "T") + "Z");
 }
 
 export function relativeTime(ts: string): string {
   const date = parseUtc(ts);
-  const diff = Date.now() - date.getTime();
+  const time = date.getTime();
+  if (Number.isNaN(time)) return "";
+  const diff = Date.now() - time;
   const sec = Math.round(diff / 1000);
   if (sec < 45) return "just now";
   const min = Math.round(sec / 60);
@@ -18,7 +22,8 @@ export function relativeTime(ts: string): string {
 }
 
 export function formatDateTime(ts: string): string {
-  return parseUtc(ts).toLocaleString();
+  const date = parseUtc(ts);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
 }
 
 // Turn the editor's HTML into readable plain text (used for diffs and copying).

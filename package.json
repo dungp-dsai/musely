@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "dev": "concurrently -n backend,frontend -c green,cyan \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:local": "./scripts/dev.sh",
+    "dev:stop": "./scripts/dev-stop.sh",
     "dev:backend": "npm --workspace apps/backend run dev",
     "dev:frontend": "npm --workspace apps/frontend run dev",
     "build": "npm --workspace apps/frontend run build",

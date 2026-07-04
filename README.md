@@ -39,20 +39,31 @@ fly-prod/      Same structure for production
 
 ## Local development
 
+### Quick start (Docker agents + one command)
+
+Per-user Hermes agents via **local Docker** (same flow as production, no Fly):
+
 ```bash
-# 1. Prerequisites: Node 22.5+
-node -v   # must be >= 22.5 (for built-in node:sqlite)
+cp .env.example .env          # fill SESSION_SECRET, Google OAuth, etc.
+npm install
+npm run dev:local             # or: ./scripts/dev.sh
+```
 
-# 2. Install dependencies
-npm install          # installs all workspaces
+This script:
+1. Builds `musely-agent:local` (Hermes image)
+2. Starts the **backend** in Docker on `musely-net` (with Docker socket for spawning agents)
+3. Starts the **frontend** on http://localhost:5173 (Vite HMR)
 
-# 3. Configure environment
+Stop everything: `npm run dev:stop` or `./scripts/dev-stop.sh`
+
+Optional: seed shared Hermes LLM config into new user volumes — see `hermes-base/README.md`.
+
+### Lightweight dev (no per-user agents)
+
+```bash
 cp .env.example .env
-# Edit .env: fill in SESSION_SECRET, Google OAuth creds.
-# Leave MACHINES_API_TOKEN blank — orchestrator is disabled in local dev.
-
-# 4. Start dev servers (backend :8081, frontend :5173 with /api proxy)
-npm run dev
+npm install
+npm run dev                   # backend :8081 + frontend :5173, orchestrator off
 ```
 
 The backend reads `.env` via `--env-file-if-exists=../../.env`. SQLite data lands in `data/musely.db` (git-ignored).

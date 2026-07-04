@@ -481,7 +481,7 @@ app.post("/api/hermes/instance/ensure", requireUser, async (req, res) => {
       return res.status(503).json({
         ready: false,
         error:
-          "Hermes template not configured. Ensure ./hermes-data/.env exists (from hermes setup) and is mounted into the API container.",
+          "Hermes orchestrator is not ready. For local dev run ./scripts/dev.sh; optional shared LLM config: ./hermes-base/config.yaml or ./hermes-base/.env (see hermes-base/README.md).",
       });
     }
     const target = await ensureInstance(req.user.id);
