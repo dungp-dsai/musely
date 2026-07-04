@@ -10,6 +10,8 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   // login form
   const [username, setUsername] = useState("admin");
@@ -59,6 +61,20 @@ export default function AdminPage() {
     await api.adminLogout().catch(() => {});
     setPhase("login");
     setEntries([]);
+  };
+
+  const handleSyncPlatform = async () => {
+    setSyncBusy(true);
+    setSyncResult(null);
+    setError(null);
+    try {
+      const res = await api.syncMuselyAgentPlatform();
+      setSyncResult(`Synced ${res.synced}/${res.total} Musely agents (${res.failed} failed).`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   const toggle = async (entry: WaitlistEntry) => {
@@ -170,10 +186,20 @@ export default function AdminPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <button className="admin-btn admin-btn-ghost" onClick={() => loadList()}>
+          <button
+            className="admin-btn admin-btn-primary"
+            type="button"
+            disabled={syncBusy}
+            onClick={handleSyncPlatform}
+          >
+            {syncBusy ? "Syncing…" : "Sync agent platform"}
+          </button>
+          <button className="admin-btn admin-btn-ghost" type="button" onClick={() => loadList()}>
             Refresh
           </button>
         </div>
+
+        {syncResult && <div className="admin-warn">{syncResult}</div>}
 
         {filtered.length === 0 ? (
           <div className="admin-empty">

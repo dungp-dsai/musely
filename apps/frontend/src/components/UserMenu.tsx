@@ -78,7 +78,7 @@ export default function UserMenu({
           </button>
           <button type="button" role="menuitem" className="user-menu-item" onClick={pick(onOpenChat)}>
             <span className="user-menu-ico" aria-hidden>💬</span>
-            Chat with Hermes
+            Chat with Musely Agent
           </button>
           <button type="button" role="menuitem" className="user-menu-item" onClick={pick(onOpenSettings)}>
             <span className="user-menu-ico" aria-hidden>🗓️</span>

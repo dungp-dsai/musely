@@ -22,5 +22,5 @@ kill_user_node_on_port 5173
 docker compose -f docker-compose.local.yml stop backend 2>/dev/null || true
 
 echo "Stopped Musely local dev (frontend + backend container)."
-echo "Per-user Hermes containers are left running — stop with:"
-echo "  docker ps --filter name=hermes- -q | xargs docker stop"
+echo "Per-user Musely agent containers are left running — stop with:"
+echo "  docker ps --filter name=musely-agent- -q | xargs docker stop"

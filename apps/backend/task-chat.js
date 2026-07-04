@@ -1,10 +1,10 @@
 // Lightweight LLM helper for task follow-up chat in the Writer UI.
 // Reads API keys from ~/.hermes/.env (OPENROUTER_API_KEY or OPENAI_API_KEY).
 
-import { loadHermesEnv } from "./hermes-env.js";
+import { loadMuselyAgentEnv } from "./musely-agent-env.js";
 
 function resolveLlmConfig() {
-  loadHermesEnv();
+  loadMuselyAgentEnv();
   if (process.env.OPENROUTER_API_KEY) {
     return {
       baseUrl: "https://openrouter.ai/api/v1",

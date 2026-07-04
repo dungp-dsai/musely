@@ -103,9 +103,9 @@ CREATE TABLE IF NOT EXISTS feed_items (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- Per-user Hermes agent instance registry (Fly Machines orchestrator).
--- machine_name keeps the historical "container_name" public API shape.
-CREATE TABLE IF NOT EXISTS hermes_instances (
+-- Per-user Musely agent instance registry (Fly Machines / Docker orchestrator).
+-- machine_name keeps the historical container_name public API shape.
+CREATE TABLE IF NOT EXISTS musely_agent_instances (
   user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   machine_id      TEXT,
   machine_name    TEXT NOT NULL UNIQUE,
@@ -116,6 +116,8 @@ CREATE TABLE IF NOT EXISTS hermes_instances (
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_musely_agent_instances_active ON musely_agent_instances(last_active_at);
+
 CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id);
 CREATE INDEX IF NOT EXISTS idx_versions_post ON versions(post_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_post ON feedback(post_id);
@@ -123,6 +125,5 @@ CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
 CREATE INDEX IF NOT EXISTS idx_ai_task_work_task ON ai_task_work(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_job_reports_post ON ai_job_reports(post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_task_chat_task ON ai_task_chat(task_id);
-CREATE INDEX IF NOT EXISTS idx_hermes_instances_active ON hermes_instances(last_active_at);
 CREATE INDEX IF NOT EXISTS idx_feed_items_user ON feed_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);

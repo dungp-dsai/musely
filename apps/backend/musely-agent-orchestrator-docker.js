@@ -1,8 +1,8 @@
-// Per-user Hermes orchestration via the local Docker CLI (local dev).
+// Per-user Musely agent orchestration via the local Docker CLI (local dev).
 //
-// Each user gets a named container + volume on HERMES_NETWORK.
+// Each user gets a named container + volume on MUSELY_AGENT_NETWORK.
 // The backend must run on the same Docker network to reach agents at:
-//   http://<container-name>:<HERMES_PORT>/v1
+//   http://<container-name>:<MUSELY_AGENT_PORT>/v1
 
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -17,18 +17,18 @@ import {
   listIdleInstances,
 } from "./db.js";
 
-const HERMES_IMAGE = process.env.HERMES_IMAGE || "musely-agent:local";
-const HERMES_NETWORK = process.env.HERMES_NETWORK || "musely-net";
+const MUSELY_AGENT_IMAGE = process.env.MUSELY_AGENT_IMAGE || "musely-agent:local";
+const MUSELY_AGENT_NETWORK = process.env.MUSELY_AGENT_NETWORK || "musely-net";
 // Host path for `docker run -v` — must be a path on the Docker daemon host, not inside
-// the backend container (e.g. /Users/you/musely/hermes-base, not /opt/hermes-base).
-const HERMES_BASE_HOST_DIR =
-  process.env.HERMES_BASE_HOST_DIR || process.env.HERMES_BASE_DIR || "";
-// In-container mount for template checks when backend runs in compose (/opt/hermes-base).
-const HERMES_BASE_MOUNT = process.env.HERMES_BASE_MOUNT || HERMES_BASE_HOST_DIR;
-const HERMES_PORT = Number(process.env.HERMES_PORT) || 8642;
-const IDLE_MINUTES = Number(process.env.HERMES_IDLE_MINUTES) || 15;
-const USER_MEMORY_MB = Number(process.env.HERMES_USER_MEMORY_MB) || 2048;
-const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 180_000;
+// the backend container (e.g. /Users/you/musely/musely-agent-platform, not /opt/musely-agent-platform).
+const MUSELY_AGENT_PLATFORM_HOST_DIR =
+  process.env.MUSELY_AGENT_PLATFORM_HOST_DIR || process.env.MUSELY_AGENT_PLATFORM_DIR || "";
+// In-container mount for template checks when backend runs in compose (/opt/musely-agent-platform).
+const MUSELY_AGENT_PLATFORM_MOUNT = process.env.MUSELY_AGENT_PLATFORM_MOUNT || MUSELY_AGENT_PLATFORM_HOST_DIR;
+const MUSELY_AGENT_PORT = Number(process.env.MUSELY_AGENT_PORT) || 8642;
+const IDLE_MINUTES = Number(process.env.MUSELY_AGENT_IDLE_MINUTES) || 15;
+const USER_MEMORY_MB = Number(process.env.MUSELY_AGENT_USER_MEMORY_MB) || 2048;
+const HEALTH_TIMEOUT_MS = Number(process.env.MUSELY_AGENT_HEALTH_TIMEOUT_MS) || 180_000;
 
 const GATEWAY_CMD = [
   "hermes",
@@ -81,24 +81,88 @@ async function dockerQuiet(args, opts) {
 // ---------- Availability ----------
 
 export function orchestratorConfigured() {
-  if (process.env.HERMES_ORCHESTRATOR === "disabled") return false;
-  if (process.env.HERMES_ORCHESTRATOR === "fly") return false;
-  return existsSync("/var/run/docker.sock") && Boolean(HERMES_IMAGE);
+  if (process.env.MUSELY_AGENT_ORCHESTRATOR === "disabled") return false;
+  if (process.env.MUSELY_AGENT_ORCHESTRATOR === "fly") return false;
+  return existsSync("/var/run/docker.sock") && Boolean(MUSELY_AGENT_IMAGE);
 }
 
-function hermesBaseTemplateReady() {
-  if (!HERMES_BASE_MOUNT || !existsSync(HERMES_BASE_MOUNT)) return false;
-  // Empty hermes-base/ (only README) — skip seeding; Hermes bootstraps on first run.
-  return (
-    existsSync(`${HERMES_BASE_MOUNT}/config.yaml`) ||
-    existsSync(`${HERMES_BASE_MOUNT}/.env`)
-  );
+const SYNC_SCRIPT = `set -eu
+DATA=/opt/data
+PLATFORM=/platform
+mkdir -p "$DATA/skills" "$DATA/sessions" "$DATA/memories"
+[ -f "$PLATFORM/config.yaml" ] && cp "$PLATFORM/config.yaml" "$DATA/config.yaml"
+[ -f "$PLATFORM/config.yaml.example" ] && [ ! -f "$DATA/config.yaml" ] && cp "$PLATFORM/config.yaml.example" "$DATA/config.yaml"
+[ -f "$PLATFORM/SOUL.md" ] && cp "$PLATFORM/SOUL.md" "$DATA/SOUL.md"
+if [ -d "$PLATFORM/skills/musely" ]; then rm -rf "$DATA/skills/musely"; cp -a "$PLATFORM/skills/musely" "$DATA/skills/musely"; fi
+ENV_FILE="$DATA/.env"
+touch "$ENV_FILE"
+for key in OPENROUTER_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GLM_API_KEY KIMI_API_KEY; do
+  eval "val=\\$$key"
+  [ -z "$val" ] && continue
+  tmp="$ENV_FILE.tmp"
+  grep -v "^$key=" "$ENV_FILE" > "$tmp" 2>/dev/null || : > "$tmp"
+  mv "$tmp" "$ENV_FILE"
+  printf '%s=%s\\n' "$key" "$val" >> "$ENV_FILE"
+done`;
+
+function platformDirForSync() {
+  return MUSELY_AGENT_PLATFORM_HOST_DIR || MUSELY_AGENT_PLATFORM_MOUNT;
 }
 
-export function templateConfigured() {
-  // hermes-base is optional — seedVolumeFromTemplate() runs only when config.yaml/.env exist.
-  // Empty hermes-base lets each user's volume bootstrap via Hermes on first start.
-  return orchestratorConfigured();
+const PLATFORM_ENV_KEYS = [
+  "OPENROUTER_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GLM_API_KEY",
+  "KIMI_API_KEY",
+];
+
+function platformEnvFlags() {
+  const flags = [];
+  for (const key of PLATFORM_ENV_KEYS) {
+    const val = process.env[key];
+    if (val) flags.push("-e", `${key}=${val}`);
+  }
+  return flags;
+}
+
+async function runPlatformSyncOnVolume(volumeName) {
+  const platformDir = platformDirForSync();
+  if (!platformDir || !existsSync(platformDir)) {
+    throw new Error("MUSELY_AGENT_PLATFORM_HOST_DIR is not set or musely-agent-platform/ is missing");
+  }
+  const args = [
+    "run",
+    "--rm",
+    "-v",
+    `${volumeName}:/opt/data`,
+    "-v",
+    `${platformDir}:/platform:ro`,
+    ...platformEnvFlags(),
+    "alpine",
+    "sh",
+    "-c",
+    SYNC_SCRIPT,
+  ];
+  await docker(args, { timeoutMs: 300_000 });
+}
+
+/** Push musely-agent-platform into a user's Docker volume (always overwrites platform-owned paths). */
+export async function syncPlatformToUserVolume(userId) {
+  const volumeName = volumeNameForUser(userId);
+  await ensureVolume(volumeName);
+  await runPlatformSyncOnVolume(volumeName);
+  console.log(`[orchestrator:docker] platform sync → ${volumeName} (user=${userId})`);
+}
+
+export async function restartUserAgentIfRunning(userId) {
+  const instance = await getInstance(userId);
+  const ref = instance?.machine_name || instance?.machine_id;
+  if (!ref) return;
+  const state = await getContainerState(ref);
+  if (state !== "started") return;
+  await docker(["exec", ref, "sh", "/opt/musely/platform/sync-platform-to-volume.sh"]);
+  await dockerQuiet(["exec", ref, "hermes", "gateway", "restart"]);
 }
 
 // ---------- Naming ----------
@@ -112,17 +176,17 @@ export function machineNameForUser(userId, userName) {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 40);
-    if (slug) return `hermes-${slug}-${userId}`;
+    if (slug) return `musely-agent-${slug}-${userId}`;
   }
-  return `hermes-user-${userId}`;
+  return `musely-agent-user-${userId}`;
 }
 
 function volumeNameForUser(userId) {
-  return `musely-hermes-user-${userId}`;
+  return `musely-agent-user-${userId}`;
 }
 
 function baseUrlForContainer(containerName) {
-  return `http://${containerName}:${HERMES_PORT}/v1`;
+  return `http://${containerName}:${MUSELY_AGENT_PORT}/v1`;
 }
 
 function newApiKey() {
@@ -132,9 +196,9 @@ function newApiKey() {
 // ---------- Container ops ----------
 
 async function ensureNetwork() {
-  const found = await dockerQuiet(["network", "inspect", HERMES_NETWORK]);
+  const found = await dockerQuiet(["network", "inspect", MUSELY_AGENT_NETWORK]);
   if (found) return;
-  await docker(["network", "create", HERMES_NETWORK]);
+  await docker(["network", "create", MUSELY_AGENT_NETWORK]);
 }
 
 async function getContainerState(containerRef) {
@@ -163,35 +227,8 @@ async function ensureVolume(volumeName) {
   return volumeName;
 }
 
-async function seedVolumeFromTemplate(volumeName) {
-  if (!hermesBaseTemplateReady() || !HERMES_BASE_HOST_DIR) return;
-  const probe = await dockerQuiet([
-    "run",
-    "--rm",
-    "-v",
-    `${volumeName}:/dest`,
-    "alpine",
-    "sh",
-    "-c",
-    "test -f /dest/config.yaml",
-  ]);
-  if (probe) return;
-  console.log(`[orchestrator] seeding ${volumeName} from ${HERMES_BASE_HOST_DIR}`);
-  await docker(
-    [
-      "run",
-      "--rm",
-      "-v",
-      `${volumeName}:/dest`,
-      "-v",
-      `${HERMES_BASE_HOST_DIR}:/src:ro`,
-      "alpine",
-      "sh",
-      "-c",
-      "cp -a /src/. /dest/",
-    ],
-    { timeoutMs: 300_000 }
-  );
+export function templateConfigured() {
+  return orchestratorConfigured();
 }
 
 function containerEnvFlags(apiKey, userId) {
@@ -201,7 +238,7 @@ function containerEnvFlags(apiKey, userId) {
     "-e",
     "API_SERVER_HOST=0.0.0.0",
     "-e",
-    `API_SERVER_PORT=${HERMES_PORT}`,
+    `API_SERVER_PORT=${MUSELY_AGENT_PORT}`,
     "-e",
     `API_SERVER_KEY=${apiKey}`,
     "-e",
@@ -209,10 +246,19 @@ function containerEnvFlags(apiKey, userId) {
     "-e",
     `AGENT_USER_ID=${userId}`,
     "-e",
-    `API_SERVER_MODEL_NAME=${process.env.HERMES_API_MODEL_NAME || "Hermes Agent"}`,
+    `API_SERVER_MODEL_NAME=${process.env.MUSELY_AGENT_API_MODEL_NAME || "Musely Agent"}`,
   ];
   if (process.env.AGENT_API_KEY) {
     flags.push("-e", `AGENT_API_KEY=${process.env.AGENT_API_KEY}`);
+  }
+  for (const key of [
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GLM_API_KEY",
+    "KIMI_API_KEY",
+  ]) {
+    if (process.env[key]) flags.push("-e", `${key}=${process.env[key]}`);
   }
   return flags;
 }
@@ -220,14 +266,18 @@ function containerEnvFlags(apiKey, userId) {
 async function createContainer({ containerName, volumeName, apiKey, userId }) {
   await ensureNetwork();
   await ensureVolume(volumeName);
-  await seedVolumeFromTemplate(volumeName);
+  try {
+    await syncPlatformToUserVolume(userId);
+  } catch (err) {
+    console.warn(`[orchestrator:docker] platform sync skipped: ${err.message}`);
+  }
 
   const args = [
     "create",
     "--name",
     containerName,
     "--network",
-    HERMES_NETWORK,
+    MUSELY_AGENT_NETWORK,
     "-v",
     `${volumeName}:/opt/data`,
     "--memory",
@@ -237,7 +287,7 @@ async function createContainer({ containerName, volumeName, apiKey, userId }) {
     "--shm-size",
     "256m",
     ...containerEnvFlags(apiKey, userId),
-    HERMES_IMAGE,
+    MUSELY_AGENT_IMAGE,
     ...GATEWAY_CMD,
   ];
 
@@ -311,7 +361,7 @@ export async function resolveMachineId(userId) {
 }
 
 async function waitForHealth(containerName, signal) {
-  const url = `http://${containerName}:${HERMES_PORT}/health`;
+  const url = `http://${containerName}:${MUSELY_AGENT_PORT}/health`;
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   let lastErr = null;
 
@@ -337,7 +387,7 @@ async function waitForHealth(containerName, signal) {
   }
 
   throw new Error(
-    `Hermes instance did not become healthy in time${lastErr ? `: ${lastErr.message}` : ""}`
+    `Musely agent instance did not become healthy in time${lastErr ? `: ${lastErr.message}` : ""}`
   );
 }
 
@@ -365,7 +415,7 @@ async function provisionInstance(userId) {
 export function ensureInstance(userId) {
   if (!orchestratorConfigured()) {
     throw new Error(
-      "Hermes docker orchestrator is not available (docker socket + HERMES_IMAGE)"
+      "Musely agent docker orchestrator is not available (docker socket + MUSELY_AGENT_IMAGE)"
     );
   }
   if (inflight.has(userId)) return inflight.get(userId);
@@ -457,11 +507,11 @@ let reaperTimer = null;
 
 export function startIdleReaper() {
   if (!orchestratorConfigured()) {
-    console.log("[orchestrator:docker] disabled (no docker socket / HERMES_IMAGE)");
+    console.log("[orchestrator:docker] disabled (no docker socket / MUSELY_AGENT_IMAGE)");
     return;
   }
   if (reaperTimer) return;
-  const intervalMs = Number(process.env.HERMES_REAPER_INTERVAL_MS) || 60_000;
+  const intervalMs = Number(process.env.MUSELY_AGENT_REAPER_INTERVAL_MS) || 60_000;
   reaperTimer = setInterval(() => {
     stopIdleInstances().catch((err) =>
       console.error("[orchestrator:docker] reaper tick failed:", err.message)
@@ -475,8 +525,8 @@ export function startIdleReaper() {
 
 export const ORCHESTRATOR_SETTINGS = {
   mode: "docker",
-  image: HERMES_IMAGE,
-  network: HERMES_NETWORK,
+  image: MUSELY_AGENT_IMAGE,
+  network: MUSELY_AGENT_NETWORK,
   idleMinutes: IDLE_MINUTES,
   memoryMb: USER_MEMORY_MB,
 };

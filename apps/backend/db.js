@@ -43,6 +43,19 @@ function runMigrations() {
   if (!hasUserCol("topics")) {
     db.exec("ALTER TABLE users ADD COLUMN topics TEXT NOT NULL DEFAULT ''");
   }
+
+  // hermes_instances → musely_agent_instances
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('hermes_instances', 'musely_agent_instances')")
+    .all()
+    .map((r) => r.name);
+  if (tables.includes("hermes_instances") && !tables.includes("musely_agent_instances")) {
+    db.exec("ALTER TABLE hermes_instances RENAME TO musely_agent_instances");
+    db.exec("DROP INDEX IF EXISTS idx_hermes_instances_active");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_musely_agent_instances_active ON musely_agent_instances(last_active_at)"
+    );
+  }
 }
 
 function nowIso() {
@@ -175,15 +188,15 @@ export async function isEmailApproved(email) {
   return Boolean(row?.approved);
 }
 
-// ---------- Hermes instances (Fly Machines orchestrator registry) ----------
+// ---------- Musely agent instances (orchestrator registry) ----------
 
 export async function getInstance(userId) {
-  return db.prepare("SELECT * FROM hermes_instances WHERE user_id = ?").get(userId) ?? null;
+  return db.prepare("SELECT * FROM musely_agent_instances WHERE user_id = ?").get(userId) ?? null;
 }
 
 export async function createInstanceRecord({ userId, machineName, machineId, volumeId, apiKey }) {
   db.prepare(
-    `INSERT INTO hermes_instances (user_id, machine_name, machine_id, volume_id, api_key, status)
+    `INSERT INTO musely_agent_instances (user_id, machine_name, machine_id, volume_id, api_key, status)
      VALUES (?, ?, ?, ?, ?, 'stopped')
      ON CONFLICT(user_id) DO NOTHING`
   ).run(userId, machineName, machineId ?? null, volumeId ?? null, apiKey);
@@ -193,7 +206,7 @@ export async function createInstanceRecord({ userId, machineName, machineId, vol
 export async function updateInstanceMachineId(userId, machineId, machineName) {
   const row = db
     .prepare(
-      `UPDATE hermes_instances
+      `UPDATE musely_agent_instances
        SET machine_id = ?, machine_name = COALESCE(?, machine_name)
        WHERE user_id = ?
        RETURNING *`
@@ -205,7 +218,7 @@ export async function updateInstanceMachineId(userId, machineId, machineName) {
 export async function setInstanceStatus(userId, status) {
   const row = db
     .prepare(
-      `UPDATE hermes_instances SET status = ? WHERE user_id = ? RETURNING *`
+      `UPDATE musely_agent_instances SET status = ? WHERE user_id = ? RETURNING *`
     )
     .get(status, userId);
   return row ?? null;
@@ -213,7 +226,7 @@ export async function setInstanceStatus(userId, status) {
 
 export async function touchInstance(userId) {
   db.prepare(
-    `UPDATE hermes_instances
+    `UPDATE musely_agent_instances
      SET last_active_at = ?, status = 'running'
      WHERE user_id = ?`
   ).run(nowIso(), userId);
@@ -223,7 +236,7 @@ export async function listInstances() {
   return db
     .prepare(
       `SELECT hi.*, u.email, u.name
-       FROM hermes_instances hi
+       FROM musely_agent_instances hi
        JOIN users u ON u.id = hi.user_id
        ORDER BY hi.last_active_at DESC`
     )
@@ -234,7 +247,7 @@ export async function listIdleInstances(idleMinutes) {
   const cutoff = new Date(Date.now() - idleMinutes * 60_000).toISOString();
   return db
     .prepare(
-      `SELECT * FROM hermes_instances WHERE status = 'running' AND last_active_at < ?`
+      `SELECT * FROM musely_agent_instances WHERE status = 'running' AND last_active_at < ?`
     )
     .all(cutoff);
 }

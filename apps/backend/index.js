@@ -38,12 +38,12 @@ import {
   listAiJobReports,
 } from "./agent-api.js";
 import {
-  hermesChatConfigured,
-  listHermesModels,
-  streamHermesChat,
-} from "./hermes-chat.js";
+  muselyAgentChatConfigured,
+  listMuselyAgentModels,
+  streamMuselyAgentChat,
+} from "./musely-agent-chat.js";
 import {
-  hermesCronConfigured,
+  muselyAgentCronConfigured,
   listCronJobsFor,
   cronSchedulerStatusFor,
   createCronJobFor,
@@ -54,7 +54,7 @@ import {
   removeCronJobFor,
   CRON_DELIVERY_OPTIONS,
   CRON_SCHEDULE_EXAMPLES,
-} from "./hermes-cron.js";
+} from "./musely-agent-cron.js";
 import {
   orchestratorConfigured,
   ensureInstance,
@@ -63,7 +63,7 @@ import {
   templateConfigured,
   startIdleReaper,
   ORCHESTRATOR_SETTINGS,
-} from "./hermes-orchestrator.js";
+} from "./musely-agent-orchestrator.js";
 import {
   listInstances,
   getInstance,
@@ -91,6 +91,7 @@ import {
   newOAuthState,
 } from "./auth.js";
 import { requireUser, requireUserOrAgent, publicUserId } from "./middleware/auth.js";
+import { syncPlatformForAllUsers, platformConfigured } from "./musely-agent-platform-sync.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8081;
@@ -124,12 +125,12 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, db: "sqlite" }));
 app.get("/api/config", (_req, res) => {
   const orchestrator = orchestratorConfigured();
   res.json({
-    hermesChatEnabled: hermesChatConfigured() || orchestrator,
-    hermesCronEnabled: hermesCronConfigured(),
+    muselyAgentChatEnabled: muselyAgentChatConfigured() || orchestrator,
+    muselyAgentCronEnabled: muselyAgentCronConfigured(),
     googleAuthEnabled: Boolean(process.env.GOOGLE_CLIENT_ID),
     orchestratorEnabled: orchestrator,
     orchestratorMissing:
-      orchestrator || process.env.HERMES_ORCHESTRATOR === "disabled"
+      orchestrator || process.env.MUSELY_AGENT_ORCHESTRATOR === "disabled"
         ? []
         : ["MACHINES_API_TOKEN", "FLY_AGENT_APP", "FLY_AGENT_IMAGE"].filter(
             (k) => !(k === "MACHINES_API_TOKEN" ? process.env.MACHINES_API_TOKEN || process.env.FLY_API_TOKEN : process.env[k])
@@ -249,6 +250,17 @@ app.post("/api/admin/waitlist/:id/revoke", requireAdmin, async (req, res) => {
   }
 });
 
+app.post("/api/admin/musely-agent/sync-platform", requireAdmin, async (req, res) => {
+  try {
+    const result = await syncPlatformForAllUsers({
+      restart: req.body?.restart !== false,
+    });
+    res.json({ ok: true, platformConfigured: platformConfigured(), ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- Auth ----------
 
 app.get("/api/auth/me", async (req, res) => {
@@ -305,9 +317,9 @@ app.post("/api/auth/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Hermes chat (authenticated) ----------
+// ---------- Musely agent chat (authenticated) ----------
 
-// Resolve the per-user Hermes target. Returns null + 202 semantics handled by caller.
+// Resolve the per-user Musely agent target. Returns null + 202 semantics handled by caller.
 async function resolveChatTarget(req, res) {
   if (!orchestratorConfigured()) return { target: undefined };
   const state = await quickState(req.user.id);
@@ -316,14 +328,14 @@ async function resolveChatTarget(req, res) {
     ensureInstance(req.user.id).catch((err) =>
       console.error("[orchestrator] background start failed:", err.message)
     );
-    res.status(202).json({ status: "starting", message: "Starting your Hermes instance…" });
+    res.status(202).json({ status: "starting", message: "Starting your Musely agent instance…" });
     return { warming: true };
   }
   const target = await ensureInstance(req.user.id);
   return { target };
 }
 
-app.get("/api/hermes/models", requireUser, async (req, res) => {
+app.get("/api/musely-agent/models", requireUser, async (req, res) => {
   try {
     if (orchestratorConfigured()) {
       const state = await quickState(req.user.id);
@@ -332,15 +344,15 @@ app.get("/api/hermes/models", requireUser, async (req, res) => {
         return res.json({ models: [], error: null, status: "starting" });
       }
       const target = await ensureInstance(req.user.id);
-      return res.json(await listHermesModels(target));
+      return res.json(await listMuselyAgentModels(target));
     }
-    res.json(await listHermesModels());
+    res.json(await listMuselyAgentModels());
   } catch (err) {
     res.status(500).json({ models: [], error: err.message });
   }
 });
 
-app.post("/api/hermes/chat", requireUser, async (req, res) => {
+app.post("/api/musely-agent/chat", requireUser, async (req, res) => {
   const controller = new AbortController();
   const abortUpstream = () => {
     if (!res.writableEnded) controller.abort();
@@ -357,7 +369,7 @@ app.post("/api/hermes/chat", requireUser, async (req, res) => {
     const { target, warming } = await resolveChatTarget(req, res);
     if (warming) return; // 202 already sent
 
-    await streamHermesChat({
+    await streamMuselyAgentChat({
       messages,
       model: typeof req.body?.model === "string" ? req.body.model : undefined,
       res,
@@ -374,26 +386,26 @@ app.post("/api/hermes/chat", requireUser, async (req, res) => {
   }
 });
 
-// ---------- Hermes cron (authenticated, per-user instance) ----------
+// ---------- Musely agent cron (authenticated, per-user instance) ----------
 
-// Ensure the user's Hermes container is running, return its container name.
+// Ensure the user's Musely agent container is running, return its container name.
 async function ensureCronContainer(req) {
   const t = await ensureInstance(req.user.id);
   return t.containerName;
 }
 
-app.get("/api/hermes/cron/meta", requireUser, (_req, res) => {
+app.get("/api/musely-agent/cron/meta", requireUser, (_req, res) => {
   res.json({
-    enabled: hermesCronConfigured(),
+    enabled: muselyAgentCronConfigured(),
     deliveryOptions: CRON_DELIVERY_OPTIONS,
     scheduleExamples: CRON_SCHEDULE_EXAMPLES,
   });
 });
 
-app.get("/api/hermes/cron/status", requireUser, async (req, res) => {
+app.get("/api/musely-agent/cron/status", requireUser, async (req, res) => {
   try {
-    if (!hermesCronConfigured()) {
-      return res.status(503).json({ error: "Hermes cron is not configured" });
+    if (!muselyAgentCronConfigured()) {
+      return res.status(503).json({ error: "Musely agent cron is not configured" });
     }
     // Don't force a cold start just to read status.
     const state = await quickState(req.user.id);
@@ -402,7 +414,7 @@ app.get("/api/hermes/cron/status", requireUser, async (req, res) => {
     }
     const inst = await getInstance(req.user.id);
     if (!inst?.machine_id) {
-      return res.json({ status: "No Hermes instance provisioned yet." });
+      return res.json({ status: "No Musely agent instance provisioned yet." });
     }
     res.json(await cronSchedulerStatusFor(inst.machine_id));
   } catch (err) {
@@ -410,10 +422,10 @@ app.get("/api/hermes/cron/status", requireUser, async (req, res) => {
   }
 });
 
-app.get("/api/hermes/cron", requireUser, async (req, res) => {
+app.get("/api/musely-agent/cron", requireUser, async (req, res) => {
   try {
-    if (!hermesCronConfigured()) {
-      return res.status(503).json({ error: "Hermes cron is not configured" });
+    if (!muselyAgentCronConfigured()) {
+      return res.status(503).json({ error: "Musely agent cron is not configured" });
     }
     // Listing reads jobs.json from the volume without forcing a cold start.
     res.json(await listCronJobsFor(req.user.id));
@@ -422,10 +434,10 @@ app.get("/api/hermes/cron", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/hermes/cron", requireUser, async (req, res) => {
+app.post("/api/musely-agent/cron", requireUser, async (req, res) => {
   try {
-    if (!hermesCronConfigured()) {
-      return res.status(503).json({ error: "Hermes cron is not configured" });
+    if (!muselyAgentCronConfigured()) {
+      return res.status(503).json({ error: "Musely agent cron is not configured" });
     }
     res.json(await createCronJobFor(await ensureCronContainer(req), req.body));
   } catch (err) {
@@ -433,10 +445,10 @@ app.post("/api/hermes/cron", requireUser, async (req, res) => {
   }
 });
 
-app.put("/api/hermes/cron/:id", requireUser, async (req, res) => {
+app.put("/api/musely-agent/cron/:id", requireUser, async (req, res) => {
   try {
-    if (!hermesCronConfigured()) {
-      return res.status(503).json({ error: "Hermes cron is not configured" });
+    if (!muselyAgentCronConfigured()) {
+      return res.status(503).json({ error: "Musely agent cron is not configured" });
     }
     res.json(await editCronJobFor(await ensureCronContainer(req), req.params.id, req.body));
   } catch (err) {
@@ -444,7 +456,7 @@ app.put("/api/hermes/cron/:id", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/hermes/cron/:id/pause", requireUser, async (req, res) => {
+app.post("/api/musely-agent/cron/:id/pause", requireUser, async (req, res) => {
   try {
     res.json(await pauseCronJobFor(await ensureCronContainer(req), req.params.id));
   } catch (err) {
@@ -452,7 +464,7 @@ app.post("/api/hermes/cron/:id/pause", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/hermes/cron/:id/resume", requireUser, async (req, res) => {
+app.post("/api/musely-agent/cron/:id/resume", requireUser, async (req, res) => {
   try {
     res.json(await resumeCronJobFor(await ensureCronContainer(req), req.params.id));
   } catch (err) {
@@ -460,7 +472,7 @@ app.post("/api/hermes/cron/:id/resume", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/hermes/cron/:id/run", requireUser, async (req, res) => {
+app.post("/api/musely-agent/cron/:id/run", requireUser, async (req, res) => {
   try {
     res.json(await runCronJobFor(await ensureCronContainer(req), req.params.id));
   } catch (err) {
@@ -468,7 +480,7 @@ app.post("/api/hermes/cron/:id/run", requireUser, async (req, res) => {
   }
 });
 
-app.delete("/api/hermes/cron/:id", requireUser, async (req, res) => {
+app.delete("/api/musely-agent/cron/:id", requireUser, async (req, res) => {
   try {
     res.json(await removeCronJobFor(await ensureCronContainer(req), req.params.id));
   } catch (err) {
@@ -476,9 +488,9 @@ app.delete("/api/hermes/cron/:id", requireUser, async (req, res) => {
   }
 });
 
-// ---------- Hermes instance status (authenticated) ----------
+// ---------- Musely agent instance status (authenticated) ----------
 
-app.get("/api/hermes/instance", requireUser, async (req, res) => {
+app.get("/api/musely-agent/instance", requireUser, async (req, res) => {
   try {
     if (!orchestratorConfigured()) {
       return res.json({ orchestrator: false, state: "shared" });
@@ -490,7 +502,7 @@ app.get("/api/hermes/instance", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/hermes/instance/ensure", requireUser, async (req, res) => {
+app.post("/api/musely-agent/instance/ensure", requireUser, async (req, res) => {
   try {
     if (!orchestratorConfigured()) {
       return res.json({ orchestrator: false, ready: true });
@@ -499,17 +511,17 @@ app.post("/api/hermes/instance/ensure", requireUser, async (req, res) => {
       return res.status(503).json({
         ready: false,
         error:
-          "Hermes orchestrator is not ready. For local dev run ./scripts/dev.sh; optional shared LLM config: ./hermes-base/config.yaml or ./hermes-base/.env (see hermes-base/README.md).",
+          "Musely agent orchestrator is not ready. Run ./scripts/dev.sh for local dev. Add musely-agent-platform/config.yaml (see config.yaml.example) and sync from Admin.",
       });
     }
     const target = await ensureInstance(req.user.id);
-    const { models, error } = await listHermesModels(target);
+    const { models, error } = await listMuselyAgentModels(target);
     if (error && !models?.length) {
       return res.status(503).json({
         ready: false,
         state: "running",
         containerName: target.containerName,
-        error: error || "Hermes agent is not responding",
+        error: error || "Musely agent is not responding",
       });
     }
     res.json({
@@ -525,7 +537,7 @@ app.post("/api/hermes/instance/ensure", requireUser, async (req, res) => {
 });
 
 // Admin: list all instances (any authenticated user; tighten later if needed)
-app.get("/api/hermes/instances", requireUser, async (_req, res) => {
+app.get("/api/musely-agent/instances", requireUser, async (_req, res) => {
   try {
     res.json({ instances: await listInstances() });
   } catch (err) {
@@ -642,7 +654,7 @@ app.post("/api/feed/clear", requireUser, (req, res) =>
   })
 );
 
-// ---------- Agent API (Hermes — session or X-Agent-Key) ----------
+// ---------- Agent API (Musely agent — session or X-Agent-Key) ----------
 
 app.get("/api/active", requireUserOrAgent, (req, res) =>
   asJson(res, () => getActivePostPayload(publicUserId(req)))
@@ -692,7 +704,7 @@ async function start() {
     console.log(`Musely API on http://${HOST}:${PORT}`);
     console.log(`Database: ${DB_PATH}`);
     console.log(`Client URL (CORS): ${CLIENT_URL}`);
-    console.log(`Hermes orchestrator: ${orchestratorConfigured() ? `enabled (app=${process.env.FLY_AGENT_APP})` : "disabled"}`);
+    console.log(`Musely agent orchestrator: ${orchestratorConfigured() ? `enabled (app=${process.env.FLY_AGENT_APP})` : "disabled"}`);
   });
 }
 

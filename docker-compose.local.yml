@@ -16,15 +16,15 @@ services:
       - ./apps/backend:/app
       - backend_node_modules:/app/node_modules
       - ./data:/app/data
-      - ./hermes-base:/opt/hermes-base:ro
+      - ./musely-agent-platform:/opt/musely-agent-platform:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.env:/env/.env:ro
     environment:
-      HERMES_ORCHESTRATOR: docker
-      HERMES_IMAGE: musely-agent:local
-      HERMES_NETWORK: musely-net
-      HERMES_BASE_MOUNT: /opt/hermes-base
-      HERMES_BASE_HOST_DIR: ${HERMES_BASE_HOST_DIR}
+      MUSELY_AGENT_ORCHESTRATOR: docker
+      MUSELY_AGENT_IMAGE: musely-agent:local
+      MUSELY_AGENT_NETWORK: musely-net
+      MUSELY_AGENT_PLATFORM_MOUNT: /opt/musely-agent-platform
+      MUSELY_AGENT_PLATFORM_HOST_DIR: ${MUSELY_AGENT_PLATFORM_HOST_DIR}
       DB_PATH: /app/data/musely.db
       HOST: 0.0.0.0
       PORT: 8081

@@ -107,7 +107,7 @@ export default function ProfilePage({
           <div className="profile-card profile-links">
             <button type="button" className="profile-link" onClick={onOpenChat}>
               <span>
-                <span className="profile-link-title">Chat with Hermes</span>
+                <span className="profile-link-title">Chat with Musely Agent</span>
                 <span className="profile-link-sub">Talk to your personal AI agent</span>
               </span>
               <span className="profile-link-arrow" aria-hidden>→</span>

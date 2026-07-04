@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
-import HermesChat from "./components/HermesChat";
+import MuselyAgentChat from "./components/MuselyAgentChat";
 import FeedView from "./components/FeedView";
 import UserMenu from "./components/UserMenu";
 import CronSettings from "./pages/CronSettings";
@@ -9,9 +9,9 @@ import WaitlistPage from "./pages/WaitlistPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import ProfilePage from "./pages/ProfilePage";
 import AdminPage from "./pages/AdminPage";
-import HermesBootScreen from "./components/HermesBootScreen";
+import MuselyAgentBootScreen from "./components/MuselyAgentBootScreen";
 import { useAuth } from "./auth/AuthContext";
-import { useHermesBoot } from "./hooks/useHermesBoot";
+import { useMuselyAgentBoot } from "./hooks/useMuselyAgentBoot";
 import { api } from "./api";
 import type { Post, PostSummary, PostStatus } from "./types";
 
@@ -23,7 +23,7 @@ const isAdminRoute = () =>
 export default function App() {
   const { user, loading, logout, refresh } = useAuth();
   const onboarded = Boolean(user?.onboarded);
-  const { phase: hermesPhase, error: hermesError, retry: retryHermes } = useHermesBoot(
+  const { phase: agentPhase, error: agentError, retry: retryAgent } = useMuselyAgentBoot(
     user,
     onboarded
   );
@@ -147,12 +147,12 @@ export default function App() {
     return <OnboardingPage user={user} onComplete={refresh} />;
   }
 
-  if (hermesPhase !== "ready") {
+  if (agentPhase !== "ready") {
     return (
-      <HermesBootScreen
+      <MuselyAgentBootScreen
         user={user}
-        error={hermesPhase === "error" ? hermesError : null}
-        onRetry={hermesPhase === "error" ? retryHermes : undefined}
+        error={agentPhase === "error" ? agentError : null}
+        onRetry={agentPhase === "error" ? retryAgent : undefined}
       />
     );
   }
@@ -162,7 +162,7 @@ export default function App() {
     return (
       <div className="app app-chat">
         <main className="main main-chat">
-          <HermesChat userId={user.id} onBack={() => setView("feed")} />
+          <MuselyAgentChat userId={user.id} onBack={() => setView("feed")} />
         </main>
       </div>
     );
@@ -261,7 +261,7 @@ export default function App() {
               ) : (
                 <div className="placeholder">
                   <div className="placeholder-mark">H</div>
-                  <h2>Start writing with Hermes</h2>
+                  <h2>Start writing with Musely Agent</h2>
                   <p>
                     Create a new piece, drop your idea and thoughts, then leave instructions for the AI.
                     Every round of feedback produces a new tracked version.

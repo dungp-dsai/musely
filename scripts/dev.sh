@@ -60,7 +60,11 @@ kill_user_node_on_port 8081
 # Vite dev server
 kill_user_node_on_port 5173
 
-mkdir -p data hermes-base
+mkdir -p data musely-agent-platform
+
+if [[ ! -f musely-agent-platform/config.yaml ]] && [[ -f musely-agent-platform/config.yaml.example ]]; then
+  cp musely-agent-platform/config.yaml.example musely-agent-platform/config.yaml
+fi
 
 if [[ ! -d node_modules ]]; then
   echo "==> Installing npm dependencies (first run)"
@@ -77,7 +81,7 @@ else
   echo "==> Skipping agent image build (--skip-agent)"
 fi
 
-export HERMES_BASE_HOST_DIR="$ROOT/hermes-base"
+export MUSELY_AGENT_PLATFORM_HOST_DIR="$ROOT/musely-agent-platform"
 
 echo "==> Starting backend (Docker, hot reload via node --watch)"
 docker compose -f docker-compose.local.yml up -d --build backend

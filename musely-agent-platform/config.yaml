@@ -1,0 +1,14 @@
+# Copy to config.yaml and edit. Synced to every user agent on provision / admin sync.
+model:
+  provider: openrouter
+  default: anthropic/claude-sonnet-4
+  api_mode: chat_completions
+
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  hard_stop_after:
+    exact_failure: 5
+    idempotent_no_progress: 5
+
+musely:
+  template_version: 1

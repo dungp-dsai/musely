@@ -1,4 +1,4 @@
-// Per-user Hermes cron management.
+// Per-user Musely agent cron management.
 //
 // Each user's scheduled jobs live inside their own Hermes container/volume.
 // Mutations run via `docker exec <container> hermes cron …` (container must be
@@ -12,10 +12,10 @@ import {
   quickState,
   isMachineRunning,
   resolveMachineId,
-} from "./hermes-orchestrator.js";
+} from "./musely-agent-orchestrator.js";
 
-export function hermesCronConfigured() {
-  if (process.env.HERMES_CRON_MODE === "disabled") return false;
+export function muselyAgentCronConfigured() {
+  if (process.env.MUSELY_AGENT_CRON_MODE === "disabled") return false;
   return orchestratorConfigured();
 }
 

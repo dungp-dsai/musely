@@ -1,13 +1,11 @@
 // Feed ingestion: turns a user's chosen topics into a set of personalized
 // feed items ("things to read" + "things to write about"). When an LLM key is
-// configured (OpenRouter/OpenAI via ~/.hermes/.env) we ask it to curate items;
-// otherwise we fall back to deterministic starter items so the feature always
-// produces something useful.
+// configured (OpenRouter/OpenAI via backend .env) we ask it to curate items;
 
-import { loadHermesEnv } from "./hermes-env.js";
+import { loadMuselyAgentEnv } from "./musely-agent-env.js";
 
 function resolveLlmConfig() {
-  loadHermesEnv();
+  loadMuselyAgentEnv();
   if (process.env.OPENROUTER_API_KEY) {
     return {
       baseUrl: "https://openrouter.ai/api/v1",
@@ -88,7 +86,7 @@ function fallbackItems(topics) {
 function buildPrompt(topics) {
   const { interests, read, write } = normalizeTopics(topics);
   const lines = [
-    "You are Hermes, a personal reading/writing agent for the user.",
+    "You are Musely agent, a personal reading/writing agent for the user.",
     "Ingest content for what the user cares about and return a curated feed.",
     "",
     "The user described, in their own words, what they want to READ and WRITE about:",
