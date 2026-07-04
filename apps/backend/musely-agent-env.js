@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 
 let envLoaded = false;
 
-export function loadHermesEnv() {
+export function loadMuselyAgentEnv() {
   if (envLoaded) return;
   envLoaded = true;
 
@@ -32,8 +32,8 @@ export function loadHermesEnv() {
   }
 }
 
-export function getHermesApiConfig() {
-  loadHermesEnv();
+export function getMuselyAgentApiConfig() {
+  loadMuselyAgentEnv();
 
   const apiKey =
     process.env.HERMES_API_SERVER_KEY || process.env.API_SERVER_KEY || "";

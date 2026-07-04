@@ -21,6 +21,41 @@ export function initDb() {
   db.exec("PRAGMA foreign_keys = ON");
   const schema = readFileSync(join(__dirname, "db", "schema.sql"), "utf8");
   db.exec(schema);
+  runMigrations();
+}
+
+// Idempotent, additive migrations for databases created before a column existed.
+function runMigrations() {
+  const waitlistCols = db.prepare("PRAGMA table_info(waitlist)").all();
+  const hasWaitlistCol = (name) => waitlistCols.some((c) => c.name === name);
+  if (!hasWaitlistCol("approved")) {
+    db.exec("ALTER TABLE waitlist ADD COLUMN approved INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasWaitlistCol("approved_at")) {
+    db.exec("ALTER TABLE waitlist ADD COLUMN approved_at TEXT");
+  }
+
+  const userCols = db.prepare("PRAGMA table_info(users)").all();
+  const hasUserCol = (name) => userCols.some((c) => c.name === name);
+  if (!hasUserCol("onboarded")) {
+    db.exec("ALTER TABLE users ADD COLUMN onboarded INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasUserCol("topics")) {
+    db.exec("ALTER TABLE users ADD COLUMN topics TEXT NOT NULL DEFAULT ''");
+  }
+
+  // hermes_instances → musely_agent_instances
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('hermes_instances', 'musely_agent_instances')")
+    .all()
+    .map((r) => r.name);
+  if (tables.includes("hermes_instances") && !tables.includes("musely_agent_instances")) {
+    db.exec("ALTER TABLE hermes_instances RENAME TO musely_agent_instances");
+    db.exec("DROP INDEX IF EXISTS idx_hermes_instances_active");
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_musely_agent_instances_active ON musely_agent_instances(last_active_at)"
+    );
+  }
 }
 
 function nowIso() {
@@ -48,15 +83,120 @@ export async function getUserById(id) {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(id) ?? null;
 }
 
-// ---------- Hermes instances (Fly Machines orchestrator registry) ----------
+// Parse the stored topics JSON into a stable { interests, write, read } shape.
+// `interests` is the free-text description the user types during onboarding;
+// write/read arrays are kept for backward compatibility with older records.
+export function parseUserTopics(raw) {
+  const empty = { interests: "", write: [], read: [] };
+  if (!raw) return empty;
+  try {
+    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const clean = (arr) =>
+      Array.isArray(arr)
+        ? arr.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 30)
+        : [];
+    return {
+      interests: String(obj?.interests || "").trim().slice(0, 4000),
+      write: clean(obj?.write),
+      read: clean(obj?.read),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+// Public-safe user view returned to the browser.
+export function serializeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+    onboarded: Boolean(user.onboarded),
+    topics: parseUserTopics(user.topics),
+  };
+}
+
+// Persist the user's onboarding topic preferences and mark them onboarded.
+export async function setUserOnboarding(userId, topics) {
+  const payload = JSON.stringify(parseUserTopics(topics));
+  const row = db
+    .prepare(
+      `UPDATE users SET onboarded = 1, topics = ? WHERE id = ? RETURNING *`
+    )
+    .get(payload, userId);
+  return row ?? null;
+}
+
+// ---------- Waiting list ----------
+
+// Returns { row, created }. created=false means the email was already on the list.
+export async function addWaitlistEmail(email, source = "landing") {
+  const normalized = String(email || "").trim().toLowerCase();
+  const existing = db.prepare("SELECT * FROM waitlist WHERE email = ?").get(normalized);
+  if (existing) return { row: existing, created: false };
+  const { lastInsertRowid } = db
+    .prepare("INSERT INTO waitlist (email, source) VALUES (?, ?)")
+    .run(normalized, source || "landing");
+  const row = db.prepare("SELECT * FROM waitlist WHERE id = ?").get(Number(lastInsertRowid));
+  return { row, created: true };
+}
+
+export async function countWaitlist() {
+  return db.prepare("SELECT COUNT(*) AS n FROM waitlist").get()?.n ?? 0;
+}
+
+export async function listWaitlist() {
+  return db
+    .prepare("SELECT * FROM waitlist ORDER BY approved ASC, created_at DESC")
+    .all();
+}
+
+export async function getWaitlistRow(id) {
+  return db.prepare("SELECT * FROM waitlist WHERE id = ?").get(id) ?? null;
+}
+
+export async function setWaitlistApproval(id, approved) {
+  const row = db
+    .prepare(
+      `UPDATE waitlist
+       SET approved = ?, approved_at = ?
+       WHERE id = ?
+       RETURNING *`
+    )
+    .get(approved ? 1 : 0, approved ? nowIso() : null, id);
+  return row ?? null;
+}
+
+// Emails listed in APPROVED_EMAILS are always allowed (owner/admin bootstrap),
+// even if they never joined the waiting list.
+function envApprovedEmails() {
+  return new Set(
+    String(process.env.APPROVED_EMAILS || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+export async function isEmailApproved(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (envApprovedEmails().has(normalized)) return true;
+  const row = db.prepare("SELECT approved FROM waitlist WHERE email = ?").get(normalized);
+  return Boolean(row?.approved);
+}
+
+// ---------- Musely agent instances (orchestrator registry) ----------
 
 export async function getInstance(userId) {
-  return db.prepare("SELECT * FROM hermes_instances WHERE user_id = ?").get(userId) ?? null;
+  return db.prepare("SELECT * FROM musely_agent_instances WHERE user_id = ?").get(userId) ?? null;
 }
 
 export async function createInstanceRecord({ userId, machineName, machineId, volumeId, apiKey }) {
   db.prepare(
-    `INSERT INTO hermes_instances (user_id, machine_name, machine_id, volume_id, api_key, status)
+    `INSERT INTO musely_agent_instances (user_id, machine_name, machine_id, volume_id, api_key, status)
      VALUES (?, ?, ?, ?, ?, 'stopped')
      ON CONFLICT(user_id) DO NOTHING`
   ).run(userId, machineName, machineId ?? null, volumeId ?? null, apiKey);
@@ -66,7 +206,7 @@ export async function createInstanceRecord({ userId, machineName, machineId, vol
 export async function updateInstanceMachineId(userId, machineId, machineName) {
   const row = db
     .prepare(
-      `UPDATE hermes_instances
+      `UPDATE musely_agent_instances
        SET machine_id = ?, machine_name = COALESCE(?, machine_name)
        WHERE user_id = ?
        RETURNING *`
@@ -78,7 +218,7 @@ export async function updateInstanceMachineId(userId, machineId, machineName) {
 export async function setInstanceStatus(userId, status) {
   const row = db
     .prepare(
-      `UPDATE hermes_instances SET status = ? WHERE user_id = ? RETURNING *`
+      `UPDATE musely_agent_instances SET status = ? WHERE user_id = ? RETURNING *`
     )
     .get(status, userId);
   return row ?? null;
@@ -86,7 +226,7 @@ export async function setInstanceStatus(userId, status) {
 
 export async function touchInstance(userId) {
   db.prepare(
-    `UPDATE hermes_instances
+    `UPDATE musely_agent_instances
      SET last_active_at = ?, status = 'running'
      WHERE user_id = ?`
   ).run(nowIso(), userId);
@@ -96,7 +236,7 @@ export async function listInstances() {
   return db
     .prepare(
       `SELECT hi.*, u.email, u.name
-       FROM hermes_instances hi
+       FROM musely_agent_instances hi
        JOIN users u ON u.id = hi.user_id
        ORDER BY hi.last_active_at DESC`
     )
@@ -107,7 +247,7 @@ export async function listIdleInstances(idleMinutes) {
   const cutoff = new Date(Date.now() - idleMinutes * 60_000).toISOString();
   return db
     .prepare(
-      `SELECT * FROM hermes_instances WHERE status = 'running' AND last_active_at < ?`
+      `SELECT * FROM musely_agent_instances WHERE status = 'running' AND last_active_at < ?`
     )
     .all(cutoff);
 }
@@ -456,6 +596,46 @@ export async function getTaskThread(taskId, userId) {
     .get(task.post_id);
 
   return { task, post, work, report, messages };
+}
+
+// ---------- Home feed ----------
+
+export async function listFeedItems(userId) {
+  return db
+    .prepare(
+      "SELECT * FROM feed_items WHERE user_id = ? ORDER BY created_at DESC, id DESC"
+    )
+    .all(userId);
+}
+
+export async function countFeedItems(userId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM feed_items WHERE user_id = ?").get(userId)?.n ?? 0;
+}
+
+export async function addFeedItems(userId, items) {
+  const insert = db.prepare(
+    `INSERT INTO feed_items (user_id, topic, kind, title, summary, url)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const inserted = [];
+  for (const item of items || []) {
+    const title = String(item?.title || "").trim();
+    if (!title) continue;
+    const { lastInsertRowid } = insert.run(
+      userId,
+      String(item?.topic || "").trim(),
+      item?.kind === "write" ? "write" : "read",
+      title,
+      String(item?.summary || "").trim(),
+      item?.url ? String(item.url).trim() : null
+    );
+    inserted.push(db.prepare("SELECT * FROM feed_items WHERE id = ?").get(Number(lastInsertRowid)));
+  }
+  return inserted;
+}
+
+export async function clearFeedItems(userId) {
+  db.prepare("DELETE FROM feed_items WHERE user_id = ?").run(userId);
 }
 
 export default db;

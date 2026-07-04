@@ -1,13 +1,13 @@
 # Musely
 
-A focused writing workspace where you drop ideas and an AI agent (Hermes) turns them into versioned drafts.
+A focused writing workspace where you drop ideas and an AI agent (Musely Agent) turns them into versioned drafts.
 
 ## What it does
 
 - **Editor** — rich-text editing with version history and diff view
-- **Feedback queue** — highlight any passage, leave a note, let Hermes act on it
-- **Per-user AI agent** — each user gets an isolated Hermes instance that reads tasks, writes new versions, and reports what changed
-- **Cron jobs** — schedule recurring Hermes tasks (daily review, morning brief, etc.)
+- **Feedback queue** — highlight any passage, leave a note, let Musely Agent act on it
+- **Per-user AI agent** — each user gets an isolated Musely agent instance that reads tasks, writes new versions, and reports what changed
+- **Cron jobs** — schedule recurring Musely agent tasks (daily review, morning brief, etc.)
 - **Task chat** — have a threaded conversation about any feedback item before the agent acts on it
 
 ---
@@ -18,7 +18,7 @@ A focused writing workspace where you drop ideas and an AI agent (Hermes) turns 
 apps/
   frontend/    React + Vite + TipTap editor (nginx on Fly)
   backend/     Express API + SQLite (single Fly machine with volume)
-  agent/       Per-user Hermes agent image (Dockerfile only — machines spawned via Fly API)
+  agent/       Per-user Musely Agent agent image (Dockerfile only — machines spawned via Fly API)
 
 fly-staging/   Fly.io configs for staging (one file per service)
   backend/fly.toml
@@ -39,20 +39,31 @@ fly-prod/      Same structure for production
 
 ## Local development
 
+### Quick start (Docker agents + one command)
+
+Per-user Musely Agent agents via **local Docker** (same flow as production, no Fly):
+
 ```bash
-# 1. Prerequisites: Node 22.5+
-node -v   # must be >= 22.5 (for built-in node:sqlite)
+cp .env.example .env          # fill SESSION_SECRET, Google OAuth, etc.
+npm install
+npm run dev:local             # or: ./scripts/dev.sh
+```
 
-# 2. Install dependencies
-npm install          # installs all workspaces
+This script:
+1. Builds `musely-agent:local` (Musely agent image)
+2. Starts the **backend** in Docker on `musely-net` (with Docker socket for spawning agents)
+3. Starts the **frontend** on http://localhost:5173 (Vite HMR)
 
-# 3. Configure environment
+Stop everything: `npm run dev:stop` or `./scripts/dev-stop.sh`
+
+Optional: seed shared Musely agent LLM config into new user volumes — see `musely-agent-platform/README.md`.
+
+### Lightweight dev (no per-user agents)
+
+```bash
 cp .env.example .env
-# Edit .env: fill in SESSION_SECRET, Google OAuth creds.
-# Leave MACHINES_API_TOKEN blank — orchestrator is disabled in local dev.
-
-# 4. Start dev servers (backend :8081, frontend :5173 with /api proxy)
-npm run dev
+npm install
+npm run dev                   # backend :8081 + frontend :5173, orchestrator off
 ```
 
 The backend reads `.env` via `--env-file-if-exists=../../.env`. SQLite data lands in `data/musely.db` (git-ignored).
@@ -136,20 +147,20 @@ Browser
         └─▶ /api/* proxied via internal network (6PN)
               └─▶ musely-{env}-backend  (Express + SQLite on /data volume)
                     └─▶ Fly Machines API
-                          └─▶ musely-{env}-agent  (per-user Hermes machines)
+                          └─▶ musely-{env}-agent  (per-user Musely agent machines)
                                 each machine has its own /opt/data volume
 ```
 
 Key design decisions:
 - **Single backend instance + one volume** — SQLite has one writer; Fly's volume is attached to a single machine. This avoids write conflicts and is entirely sufficient for this workload.
-- **Per-user agent machines** — instead of Docker containers on a single host, each user's Hermes instance is a real Fly Machine created on demand via the Fly Machines API and stopped after `HERMES_IDLE_MINUTES` of inactivity.
+- **Per-user agent machines** — instead of Docker containers on a single host, each user's Musely agent instance is a real Fly Machine created on demand via the Fly Machines API and stopped after `MUSELY_AGENT_IDLE_MINUTES` of inactivity.
 - **Internal network only for agent** — user machines are not exposed via Fly's HTTP proxy; the backend reaches them over Fly's private WireGuard (6PN) at `<machine-id>.vm.<agent-app>.internal:8642`.
 
 ---
 
-## Agent API (Hermes integration)
+## Agent API (Musely agent integration)
 
-Hermes machines call back into the backend using `X-Agent-Key: <AGENT_API_KEY>`. The key endpoints:
+Musely agent machines call back into the backend using `X-Agent-Key: <AGENT_API_KEY>`. The key endpoints:
 
 ```
 GET  /api/active              Active post + pending feedback
@@ -178,8 +189,8 @@ POST /api/posts/:id/reports   Submit a job summary report
 | `FLY_AGENT_APP` | — | ✓ (backend) |
 | `FLY_AGENT_IMAGE` | — | ✓ (backend) |
 | `FLY_AGENT_REGION` | `sin` | — |
-| `HERMES_IDLE_MINUTES` | `15` | — |
-| `HERMES_USER_MEMORY_MB` | `2048` | — |
-| `HERMES_USER_CPUS` | `1` | — |
+| `MUSELY_AGENT_IDLE_MINUTES` | `15` | — |
+| `MUSELY_AGENT_USER_MEMORY_MB` | `2048` | — |
+| `MUSELY_AGENT_USER_CPUS` | `1` | — |
 | `OPENROUTER_API_KEY` | — | for task chat |
 | `BACKEND_URL` | — | frontend fly.toml |

@@ -1,16 +1,16 @@
-// Proxy to Hermes Agent's OpenAI-compatible API server.
+// Proxy to Musely Agent's OpenAI-compatible API server.
 // Keeps API_SERVER_KEY on the server; the browser talks only to writer-app.
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { getHermesApiConfig } from "./hermes-env.js";
+import { getMuselyAgentApiConfig } from "./musely-agent-env.js";
 
-const HERMES_CHAT_MODEL = process.env.HERMES_CHAT_MODEL || "";
-const GATEWAY_MODEL = process.env.HERMES_API_MODEL_NAME || "Hermes Agent";
-const HERMES_DATA_DIR = process.env.HERMES_DATA_DIR || "/opt/hermes-data";
-const HERMES_BASE_DIR = process.env.HERMES_BASE_DIR || "/opt/hermes-base";
+const MUSELY_AGENT_CHAT_MODEL = process.env.MUSELY_AGENT_CHAT_MODEL || "";
+const GATEWAY_MODEL = process.env.MUSELY_AGENT_API_MODEL_NAME || "Musely Agent";
+const MUSELY_AGENT_DATA_DIR = process.env.MUSELY_AGENT_DATA_DIR || "/opt/hermes-data";
+const MUSELY_AGENT_PLATFORM_DIR = process.env.MUSELY_AGENT_PLATFORM_DIR || "/opt/musely-agent-platform";
 
-function hermesHeaders(apiKey) {
+function muselyAgentHeaders(apiKey) {
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   return headers;
@@ -20,7 +20,7 @@ function resolveTarget(target) {
   if (target?.baseUrl && target?.apiKey) {
     return { baseUrl: target.baseUrl.replace(/\/+$/, ""), apiKey: target.apiKey };
   }
-  return getHermesApiConfig();
+  return getMuselyAgentApiConfig();
 }
 
 function isGatewayModel(model) {
@@ -35,7 +35,7 @@ function isGatewayModel(model) {
 
 /** Read model.default from the mounted Hermes template (for UI display only). */
 function readTemplateDefaultModel() {
-  for (const dir of [HERMES_DATA_DIR, HERMES_BASE_DIR]) {
+  for (const dir of [MUSELY_AGENT_DATA_DIR, MUSELY_AGENT_PLATFORM_DIR]) {
     const path = join(dir, "config.yaml");
     if (!existsSync(path)) continue;
     const text = readFileSync(path, "utf8");
@@ -47,12 +47,12 @@ function readTemplateDefaultModel() {
   return null;
 }
 
-export function hermesChatConfigured() {
-  const { apiKey, baseUrl } = getHermesApiConfig();
+export function muselyAgentChatConfigured() {
+  const { apiKey, baseUrl } = getMuselyAgentApiConfig();
   return Boolean(apiKey && baseUrl);
 }
 
-export async function listHermesModels(_target) {
+export async function listMuselyAgentModels(_target) {
   const configuredDefault = readTemplateDefaultModel();
   return {
     models: [GATEWAY_MODEL],
@@ -62,29 +62,29 @@ export async function listHermesModels(_target) {
   };
 }
 
-export async function resolveHermesModel(_target, requestedModel) {
-  if (HERMES_CHAT_MODEL) return HERMES_CHAT_MODEL;
+export async function resolveMuselyAgentModel(_target, requestedModel) {
+  if (MUSELY_AGENT_CHAT_MODEL) return MUSELY_AGENT_CHAT_MODEL;
   if (requestedModel && !isGatewayModel(requestedModel)) return requestedModel;
   // Omit model — Hermes uses model.default from the user's synced config.yaml volume.
   return null;
 }
 
-export async function streamHermesChat({ messages, model, res, signal, target }) {
+export async function streamMuselyAgentChat({ messages, model, res, signal, target }) {
   const { apiKey, baseUrl } = resolveTarget(target);
   if (!apiKey) {
     res.status(503).json({
-      error: "Hermes API not configured (set API_SERVER_KEY in ~/.hermes/.env or HERMES_API_SERVER_KEY)",
+      error: "Musely agent API not configured (set API_SERVER_KEY in ~/.hermes/.env or HERMES_API_SERVER_KEY)",
     });
     return;
   }
 
-  const resolvedModel = await resolveHermesModel(target, model);
+  const resolvedModel = await resolveMuselyAgentModel(target, model);
   const body = { messages, stream: true };
   if (resolvedModel) body.model = resolvedModel;
 
   const upstream = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: hermesHeaders(apiKey),
+    headers: muselyAgentHeaders(apiKey),
     signal,
     body: JSON.stringify(body),
   });

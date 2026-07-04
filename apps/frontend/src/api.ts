@@ -1,4 +1,13 @@
-import type { Post, PostSummary, Version, Feedback, TaskThread, AiTaskChatMessage } from "./types";
+import type {
+  Post,
+  PostSummary,
+  Version,
+  Feedback,
+  TaskThread,
+  AiTaskChatMessage,
+  UserTopics,
+  FeedItem,
+} from "./types";
 import type { CronJob } from "./lib/cronTypes";
 
 export type User = {
@@ -6,6 +15,8 @@ export type User = {
   email: string;
   name: string;
   picture: string | null;
+  onboarded: boolean;
+  topics: UserTopics;
 };
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -28,8 +39,65 @@ const json = async (res: Response) => {
   return res.json();
 };
 
+export type WaitlistEntry = {
+  id: number;
+  email: string;
+  approved: boolean;
+  source: string;
+  createdAt: string;
+  approvedAt: string | null;
+};
+
 export const api = {
+  joinWaitlist: (email: string): Promise<{ ok: boolean; alreadyJoined: boolean; emailed: boolean }> =>
+    apiFetch("/api/waitlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }).then(json),
+
+  adminMe: (): Promise<{ authenticated: boolean; configured: boolean }> =>
+    apiFetch("/api/admin/me").then(json),
+
+  adminLogin: (username: string, password: string): Promise<{ ok: boolean }> =>
+    apiFetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    }).then(json),
+
+  adminLogout: (): Promise<{ ok: boolean }> =>
+    apiFetch("/api/admin/logout", { method: "POST" }).then(json),
+
+  adminListWaitlist: (): Promise<{ entries: WaitlistEntry[]; emailConfigured: boolean }> =>
+    apiFetch("/api/admin/waitlist").then(json),
+
+  adminApprove: (id: number): Promise<{ ok: boolean; emailed: boolean }> =>
+    apiFetch(`/api/admin/waitlist/${id}/approve`, { method: "POST" }).then(json),
+
+  adminRevoke: (id: number): Promise<{ ok: boolean }> =>
+    apiFetch(`/api/admin/waitlist/${id}/revoke`, { method: "POST" }).then(json),
+
   me: (): Promise<User> => apiFetch("/api/auth/me").then(json),
+
+  completeOnboarding: (topics: UserTopics): Promise<User> =>
+    apiFetch("/api/onboarding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(topics),
+    }).then(json),
+
+  getFeed: (): Promise<FeedItem[]> => apiFetch("/api/feed").then(json),
+
+  ingestFeed: (): Promise<{ ok: boolean; source: string; items: FeedItem[] }> =>
+    apiFetch("/api/feed/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ replace: true }),
+    }).then(json),
+
+  clearFeed: (): Promise<{ ok: boolean; count: number }> =>
+    apiFetch("/api/feed/clear", { method: "POST" }).then(json),
 
   logout: (): Promise<{ ok: boolean }> =>
     apiFetch("/api/auth/logout", { method: "POST" }).then(json),
@@ -114,44 +182,45 @@ export const api = {
     }).then(json),
 
   getConfig: (): Promise<{
-    hermesChatEnabled: boolean;
-    hermesCronEnabled: boolean;
+    muselyAgentChatEnabled: boolean;
+    muselyAgentCronEnabled: boolean;
     googleAuthEnabled: boolean;
     orchestratorEnabled: boolean;
   }> => apiFetch("/api/config").then(json),
 
-  getHermesModels: (): Promise<{
+  getMuselyAgentModels: (): Promise<{
     models: string[];
     defaultModel?: string | null;
     gatewayModel?: string;
     error: string | null;
-  }> => apiFetch("/api/hermes/models").then(json),
+  }> => apiFetch("/api/musely-agent/models").then(json),
 
   getCronMeta: (): Promise<{
     enabled: boolean;
     deliveryOptions: { value: string; label: string }[];
     scheduleExamples: string[];
-  }> => apiFetch("/api/hermes/cron/meta").then(json),
+  }> => apiFetch("/api/musely-agent/cron/meta").then(json),
 
   listCronJobs: (): Promise<{ jobs: CronJob[]; source?: string; raw?: string }> =>
-    apiFetch("/api/hermes/cron").then(json),
+    apiFetch("/api/musely-agent/cron").then(json),
 
-  getCronStatus: (): Promise<{ status: string }> => apiFetch("/api/hermes/cron/status").then(json),
+  getCronStatus: (): Promise<{ status: string }> =>
+    apiFetch("/api/musely-agent/cron/status").then(json),
 
   getInstanceStatus: (): Promise<{
     orchestrator: boolean;
     state?: string;
     settings?: { idleMinutes: number; memory: string; cpus: string };
-  }> => apiFetch("/api/hermes/instance").then(json),
+  }> => apiFetch("/api/musely-agent/instance").then(json),
 
-  ensureHermesInstance: (): Promise<{
+  ensureMuselyAgentInstance: (): Promise<{
     ready: boolean;
     state?: string;
     orchestrator?: boolean;
     containerName?: string;
     error?: string;
   }> =>
-    apiFetch("/api/hermes/instance/ensure", { method: "POST" }).then(async (res) => {
+    apiFetch("/api/musely-agent/instance/ensure", { method: "POST" }).then(async (res) => {
       const body = await res.json().catch(() => ({}));
       if (res.status === 202) return { ...body, ready: false };
       if (!res.ok) {
@@ -160,8 +229,21 @@ export const api = {
       return body;
     }),
 
+  syncMuselyAgentPlatform: (): Promise<{
+    ok: boolean;
+    total: number;
+    synced: number;
+    failed: number;
+    results: { userId: number; email: string; ok: boolean; error?: string }[];
+  }> =>
+    apiFetch("/api/admin/musely-agent/sync-platform", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ restart: true }),
+    }).then(json),
+
   createCronJob: (data: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> =>
-    apiFetch("/api/hermes/cron", {
+    apiFetch("/api/musely-agent/cron", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -171,23 +253,23 @@ export const api = {
     id: string,
     data: Record<string, unknown>
   ): Promise<{ ok: boolean; message?: string }> =>
-    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}`, {
+    apiFetch(`/api/musely-agent/cron/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }).then(json),
 
   pauseCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
-    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}/pause`, { method: "POST" }).then(json),
+    apiFetch(`/api/musely-agent/cron/${encodeURIComponent(id)}/pause`, { method: "POST" }).then(json),
 
   resumeCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
-    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}/resume`, { method: "POST" }).then(json),
+    apiFetch(`/api/musely-agent/cron/${encodeURIComponent(id)}/resume`, { method: "POST" }).then(json),
 
   runCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
-    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}/run`, { method: "POST" }).then(json),
+    apiFetch(`/api/musely-agent/cron/${encodeURIComponent(id)}/run`, { method: "POST" }).then(json),
 
   deleteCronJob: (id: string): Promise<{ ok: boolean; message?: string }> =>
-    apiFetch(`/api/hermes/cron/${encodeURIComponent(id)}`, { method: "DELETE" }).then(json),
+    apiFetch(`/api/musely-agent/cron/${encodeURIComponent(id)}`, { method: "DELETE" }).then(json),
 };
 
 export { API_BASE };

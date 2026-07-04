@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type User } from "../api";
 
-export type HermesBootPhase = "idle" | "checking" | "preparing" | "ready" | "error";
+export type MuselyAgentBootPhase = "idle" | "checking" | "preparing" | "ready" | "error";
 
 const POLL_MS = 4000;
-const MAX_POLLS = 90; // ~6 minutes (first provision can be slow)
+const MAX_POLLS = 90;
 
-export function useHermesBoot(user: User | null) {
-  const [phase, setPhase] = useState<HermesBootPhase>("idle");
+export function useMuselyAgentBoot(user: User | null, enabled = true) {
+  const [phase, setPhase] = useState<MuselyAgentBootPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !enabled) {
       setPhase("idle");
       setError(null);
       return;
@@ -31,7 +31,7 @@ export function useHermesBoot(user: User | null) {
           if (missing?.length) {
             if (!cancelled) {
               setError(
-                `Assistant orchestrator is not configured on the server (missing: ${missing.join(", ")}).`
+                `Musely agent orchestrator is not configured (missing: ${missing.join(", ")}).`
               );
               setPhase("error");
             }
@@ -45,7 +45,7 @@ export function useHermesBoot(user: User | null) {
 
         for (let i = 0; i < MAX_POLLS; i++) {
           if (cancelled) return;
-          const res = await api.ensureHermesInstance();
+          const res = await api.ensureMuselyAgentInstance();
           if (res.ready) {
             if (!cancelled) setPhase("ready");
             return;
@@ -61,7 +61,7 @@ export function useHermesBoot(user: User | null) {
         }
 
         if (!cancelled) {
-          setError("Your assistant is taking longer than expected. Please try again.");
+          setError("Your Musely agent is taking longer than expected. Please try again.");
           setPhase("error");
         }
       } catch (e) {
@@ -75,7 +75,7 @@ export function useHermesBoot(user: User | null) {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, attempt]);
+  }, [user?.id, enabled, attempt]);
 
   const retry = useCallback(() => {
     setAttempt((n) => n + 1);

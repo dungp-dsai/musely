@@ -1,0 +1,32 @@
+# Local dev backend — Docker socket + hot reload (used by docker-compose.local.yml).
+FROM node:22-bookworm-slim
+
+# Static Docker CLI (bookworm has no docker-cli package; socket is mounted from host).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && ARCH="$(uname -m)" \
+  && case "$ARCH" in \
+       x86_64) DARCH=x86_64 ;; \
+       aarch64|arm64) DARCH=aarch64 ;; \
+       *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://download.docker.com/linux/static/stable/${DARCH}/docker-27.4.1.tgz" \
+     | tar xz -C /usr/local/bin --strip-components=1 docker \
+  && apt-get purge -y curl \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY apps/backend/package.json ./
+RUN npm install --omit=dev
+
+COPY apps/backend/ ./
+
+ENV NODE_ENV=development \
+    PORT=8081 \
+    HOST=0.0.0.0
+
+EXPOSE 8081
+
+CMD ["node", "--watch", "--no-warnings=ExperimentalWarning", "--env-file-if-exists=/env/.env", "index.js"]

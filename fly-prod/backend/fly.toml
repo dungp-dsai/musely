@@ -15,9 +15,9 @@ primary_region = "sin"
   FLY_AGENT_IMAGE   = "registry.fly.io/musely-prod-agent:latest"
   FLY_AGENT_REGION  = "sin"
   FLY_API_HOSTNAME  = "api.machines.dev"
-  HERMES_IDLE_MINUTES = "30"
-  HERMES_USER_MEMORY_MB = "2048"
-  HERMES_USER_CPUS  = "1"
+  MUSELY_AGENT_IDLE_MINUTES = "30"
+  MUSELY_AGENT_USER_MEMORY_MB = "2048"
+  MUSELY_AGENT_USER_CPUS  = "1"
 
 # Secrets: copy fly-prod/backend/secrets.env.example → secrets.env, then import.
 

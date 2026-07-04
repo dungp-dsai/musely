@@ -1,9 +1,9 @@
-// Per-user Hermes orchestration via the Fly Machines API.
+// Per-user Musely agent orchestration via the Fly Machines API.
 //
 // Each user gets a dedicated Fly Machine + persistent volume inside
 // FLY_AGENT_APP. Machines are started on demand and stopped when idle.
 // The backend reaches running machines through Fly's internal 6PN network:
-//   http://<machine-id>.vm.<FLY_AGENT_APP>.internal:<HERMES_PORT>/v1
+//   http://<machine-id>.vm.<FLY_AGENT_APP>.internal:<MUSELY_AGENT_PORT>/v1
 
 import { randomBytes } from "node:crypto";
 import {
@@ -26,11 +26,14 @@ const FLY_AGENT_IMAGE = process.env.FLY_AGENT_IMAGE;
 const FLY_AGENT_REGION = process.env.FLY_AGENT_REGION || "sin";
 const FLY_API_BASE = `https://${process.env.FLY_API_HOSTNAME || "api.machines.dev"}`;
 
-const HERMES_PORT = Number(process.env.HERMES_PORT) || 8642;
-const IDLE_MINUTES = Number(process.env.HERMES_IDLE_MINUTES) || 15;
-const USER_MEMORY_MB = Number(process.env.HERMES_USER_MEMORY_MB) || 2048;
-const USER_CPUS = Number(process.env.HERMES_USER_CPUS) || 1;
-const HEALTH_TIMEOUT_MS = Number(process.env.HERMES_HEALTH_TIMEOUT_MS) || 90_000;
+const MUSELY_AGENT_PORT = Number(process.env.MUSELY_AGENT_PORT) || 8642;
+const IDLE_MINUTES = Number(process.env.MUSELY_AGENT_IDLE_MINUTES) || 15;
+const USER_MEMORY_MB = Number(process.env.MUSELY_AGENT_USER_MEMORY_MB) || 2048;
+const USER_CPUS = Number(process.env.MUSELY_AGENT_USER_CPUS) || 1;
+const HEALTH_TIMEOUT_MS = Number(process.env.MUSELY_AGENT_HEALTH_TIMEOUT_MS) || 180_000;
+
+// Headless gateway + API server (default image CMD is interactive `hermes` TUI).
+const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
 
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
@@ -38,7 +41,7 @@ const inflight = new Map();
 // ---------- Availability ----------
 
 export function orchestratorConfigured() {
-  if (process.env.HERMES_ORCHESTRATOR === "disabled") return false;
+  if (process.env.MUSELY_AGENT_ORCHESTRATOR === "disabled") return false;
   return Boolean(machinesApiToken() && FLY_AGENT_APP && FLY_AGENT_IMAGE);
 }
 
@@ -85,18 +88,18 @@ export function machineNameForUser(userId, userName) {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 40);
-    if (slug) return `hermes-${slug}-${userId}`;
+    if (slug) return `musely-agent-${slug}-${userId}`;
   }
-  return `hermes-user-${userId}`;
+  return `musely-agent-user-${userId}`;
 }
 
 function volumeNameForUser(userId) {
   // Volume names must match ^[a-zA-Z][a-zA-Z0-9_]*$
-  return `hermes_user_${userId}`;
+  return `musely_agent_user_${userId}`;
 }
 
 function baseUrlForMachine(machineId) {
-  return `http://${machineId}.vm.${FLY_AGENT_APP}.internal:${HERMES_PORT}/v1`;
+  return `http://${machineId}.vm.${FLY_AGENT_APP}.internal:${MUSELY_AGENT_PORT}/v1`;
 }
 
 function newApiKey() {
@@ -117,7 +120,13 @@ async function getMachineState(machineId) {
 async function findExistingVolume(userId) {
   try {
     const vols = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/volumes`);
-    return vols?.find((v) => v.name === volumeNameForUser(userId) && v.state !== "destroyed")?.id ?? null;
+    const primary = volumeNameForUser(userId);
+    const legacy = `hermes_user_${userId}`;
+    return (
+      vols?.find((v) => v.name === primary && v.state !== "destroyed")?.id ??
+      vols?.find((v) => v.name === legacy && v.state !== "destroyed")?.id ??
+      null
+    );
   } catch {
     return null;
   }
@@ -132,38 +141,121 @@ async function createVolume(userId) {
   return vol.id;
 }
 
-async function createMachine({ machineName, volumeId, apiKey, userId }) {
+function machineConfig({ volumeId, apiKey, userId }) {
   const env = {
     API_SERVER_ENABLED: "true",
-    API_SERVER_HOST: "0.0.0.0",
-    API_SERVER_PORT: String(HERMES_PORT),
+    API_SERVER_HOST: "::",
+    API_SERVER_PORT: String(MUSELY_AGENT_PORT),
     API_SERVER_KEY: apiKey,
-    API_SERVER_MODEL_NAME: process.env.HERMES_API_MODEL_NAME || "Hermes Agent",
+    API_SERVER_MODEL_NAME: process.env.MUSELY_AGENT_API_MODEL_NAME || "Musely Agent",
     AGENT_USER_ID: String(userId),
+    HERMES_GATEWAY_NO_SUPERVISE: "1",
   };
   if (process.env.AGENT_API_KEY) env.AGENT_API_KEY = process.env.AGENT_API_KEY;
+  for (const key of [
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GLM_API_KEY",
+    "KIMI_API_KEY",
+  ]) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
 
+  return {
+    image: FLY_AGENT_IMAGE,
+    env,
+    mounts: [{ volume: volumeId, path: "/opt/data" }],
+    init: {
+      cmd: GATEWAY_CMD,
+    },
+    restart: { policy: "no" },
+    guest: {
+      cpu_kind: "shared",
+      cpus: USER_CPUS,
+      memory_mb: USER_MEMORY_MB,
+    },
+  };
+}
+
+async function createMachine({ machineName, volumeId, apiKey, userId }) {
   const machine = await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines`, {
     name: machineName,
     region: FLY_AGENT_REGION,
-    config: {
-      image: FLY_AGENT_IMAGE,
-      env,
-      mounts: [{ volume: volumeId, path: "/opt/data" }],
-      restart: { policy: "no" },
-      guest: {
-        cpu_kind: "shared",
-        cpus: USER_CPUS,
-        memory_mb: USER_MEMORY_MB,
-      },
-    },
-    skip_launch: true,
+    config: machineConfig({ volumeId, apiKey, userId }),
+    // Boot on create. skip_launch leaves machines in "created" where /start does not work.
   });
   return machine;
 }
 
+/** Sync platform files from agent image into user volume (starts machine briefly if needed). */
+export async function syncPlatformToUserVolume(userId) {
+  const instance = await getInstance(userId);
+  const machineId = instance?.machine_id;
+  if (!machineId) throw new Error("No agent machine for user — provision first");
+
+  let started = false;
+  const state = await getMachineState(machineId);
+  if (!isMachineRunning(state)) {
+    await ensureMachineGatewayCmd(machineId);
+    if (state === "created") await launchMachine(machineId);
+    else await startMachine(machineId);
+    await waitForMachineState(machineId, "started", 120);
+    started = true;
+  }
+
+  await execInContainer(machineId, ["sh", "/opt/musely/platform/sync-platform-to-volume.sh"], {
+    timeoutMs: 120_000,
+  });
+
+  if (started) {
+    await stopMachine(machineId);
+    await setInstanceStatus(userId, "stopped");
+  }
+}
+
+export async function restartUserAgentIfRunning(userId) {
+  const instance = await getInstance(userId);
+  const machineId = instance?.machine_id;
+  if (!machineId) return;
+  const state = await getMachineState(machineId);
+  if (!isMachineRunning(state)) return;
+  await execInContainer(machineId, ["sh", "/opt/musely/platform/sync-platform-to-volume.sh"]);
+  await execInContainer(machineId, ["hermes", "gateway", "restart"]);
+}
+
+/** /start only works from "stopped". Machines in "created" must be launched via update. */
+async function launchMachine(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) throw new Error("Machine config missing");
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: machine.config,
+    skip_launch: false,
+  });
+}
+
 async function startMachine(machineId) {
   await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/start`);
+}
+
+/** Patch stopped machines missing foreground-gateway settings. */
+async function ensureMachineGatewayCmd(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) return;
+  const current = machine.config.init?.cmd;
+  const env = machine.config.env || {};
+  const needsCmd = JSON.stringify(current) !== JSON.stringify(GATEWAY_CMD);
+  const needsEnv =
+    env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
+  if (!needsCmd && !needsEnv) return;
+  await flyRequest("POST", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, {
+    config: {
+      ...machine.config,
+      env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
+      init: { ...machine.config.init, cmd: GATEWAY_CMD },
+    },
+    skip_launch: true,
+  });
 }
 
 async function stopMachine(machineId) {
@@ -177,11 +269,26 @@ async function stopMachine(machineId) {
   }
 }
 
-async function waitForMachineState(machineId, state, timeoutSec = 60) {
-  await flyRequest(
-    "GET",
-    `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/wait?state=${state}&timeout=${timeoutSec}`
-  );
+const FLY_WAIT_MAX_SEC = 60; // Fly Machines API: WaitMachineRequest.Timeout must be in [1s, 60s]
+
+async function waitForMachineState(machineId, state, totalTimeoutSec = 60) {
+  const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
+  while (Date.now() < deadline) {
+    const remainingSec = Math.ceil((deadline - Date.now()) / 1000);
+    const chunkSec = Math.min(FLY_WAIT_MAX_SEC, Math.max(1, remainingSec));
+    try {
+      await flyRequest(
+        "GET",
+        `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/wait?state=${state}&timeout=${chunkSec}`
+      );
+      return;
+    } catch (err) {
+      const msg = err.message || "";
+      const timedOut =
+        msg.includes("timeout") || msg.includes("408") || msg.includes("deadline exceeded");
+      if (!timedOut || Date.now() >= deadline) throw err;
+    }
+  }
 }
 
 // ---------- Exported orchestrator primitives ----------
@@ -246,21 +353,31 @@ export async function resolveMachineId(userId) {
 // ---------- Health polling ----------
 
 async function waitForHealth(machineId, signal) {
-  const url = `http://${machineId}.vm.${FLY_AGENT_APP}.internal:${HERMES_PORT}/health`;
+  const url = `http://${machineId}.vm.${FLY_AGENT_APP}.internal:${MUSELY_AGENT_PORT}/health`;
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   let lastErr = null;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error("aborted");
+
+    const state = await getMachineState(machineId);
+    if (state === "stopped" || state === "destroyed") {
+      throw new Error(
+        `Musely agent machine exited before becoming healthy (state=${state}). ` +
+          `Check: flyctl logs -a ${FLY_AGENT_APP} --machine ${machineId}`
+      );
+    }
+
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (res.ok) return true;
+      lastErr = new Error(`HTTP ${res.status}`);
     } catch (err) {
       lastErr = err;
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
   throw new Error(
-    `Hermes instance did not become healthy in time${lastErr ? `: ${lastErr.message}` : ""}`
+    `Musely agent instance did not become healthy in time${lastErr ? `: ${lastErr.message}` : ""}`
   );
 }
 
@@ -288,26 +405,30 @@ async function provisionInstance(userId) {
 }
 
 /**
- * Ensure the user's Hermes machine exists, is running, and is healthy.
+ * Ensure the user's Musely agent machine exists, is running, and is healthy.
  * Returns { baseUrl, apiKey, machineId, machineName, containerName }.
  * Concurrent calls for the same userId are coalesced into one promise.
  */
 export function ensureInstance(userId) {
   if (!orchestratorConfigured()) {
     throw new Error(
-      "Hermes orchestrator is not available (set MACHINES_API_TOKEN, FLY_AGENT_APP, FLY_AGENT_IMAGE)"
+      "Musely agent orchestrator is not available (set MACHINES_API_TOKEN, FLY_AGENT_APP, FLY_AGENT_IMAGE)"
     );
   }
   if (inflight.has(userId)) return inflight.get(userId);
 
   const p = (async () => {
+    const t0 = Date.now();
+    const logStep = (step) => console.log(`[orchestrator] ensure user=${userId} +${Date.now() - t0}ms ${step}`);
+
     let instance = await provisionInstance(userId);
+    logStep("provisioned");
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
     const state = await getMachineState(machineId);
 
     if (state === "destroyed" || state === "missing") {
-      // Machine was deleted externally; recreate it (volume persists).
+      // Machine was deleted externally; recreate it (volume persists). Boots on create.
       const user = await getUserById(userId);
       const newName = machineNameForUser(userId, user?.name);
       const volumeId = (await findExistingVolume(userId)) || (await createVolume(userId));
@@ -316,15 +437,22 @@ export function ensureInstance(userId) {
       machineId = newMachine.id;
       machineName = newName;
       await setInstanceStatus(userId, "starting");
-      await startMachine(machineId);
-    } else if (state === "stopped" || state === "created") {
+    } else if (state === "created") {
+      // skip_launch leftovers or mid-provision — /start rejects "created"; launch via update.
       await setInstanceStatus(userId, "starting");
+      await ensureMachineGatewayCmd(machineId);
+      await launchMachine(machineId);
+    } else if (state === "stopped") {
+      await setInstanceStatus(userId, "starting");
+      await ensureMachineGatewayCmd(machineId);
       await startMachine(machineId);
     }
     // state === "started" → already running, fall through to health check
 
-    await waitForMachineState(machineId, "started", 60);
+    await waitForMachineState(machineId, "started", 120);
+    logStep(`machine started (${machineId})`);
     await waitForHealth(machineId);
+    logStep("healthy");
     await touchInstance(userId);
 
     return {
@@ -332,7 +460,7 @@ export function ensureInstance(userId) {
       apiKey,
       machineId,
       machineName,
-      containerName: machineId, // backward-compat alias used by hermes-cron.js
+      containerName: machineId, // backward-compat alias used by musely-agent-cron.js
     };
   })().finally(() => inflight.delete(userId));
 
@@ -381,7 +509,7 @@ export function startIdleReaper() {
     return;
   }
   if (reaperTimer) return;
-  const intervalMs = Number(process.env.HERMES_REAPER_INTERVAL_MS) || 60_000;
+  const intervalMs = Number(process.env.MUSELY_AGENT_REAPER_INTERVAL_MS) || 60_000;
   reaperTimer = setInterval(() => {
     stopIdleInstances().catch((err) =>
       console.error("[orchestrator] reaper tick failed:", err.message)

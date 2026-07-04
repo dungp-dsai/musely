@@ -1,0 +1,41 @@
+# Local development — backend on Docker network + Docker socket for per-user agents.
+# Frontend runs on the host (Vite HMR) via scripts/dev.sh.
+#
+# Usage: ./scripts/dev.sh
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile.dev
+    image: musely-backend:local
+    container_name: musely-backend
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./apps/backend:/app
+      - backend_node_modules:/app/node_modules
+      - ./data:/app/data
+      - ./musely-agent-platform:/opt/musely-agent-platform:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.env:/env/.env:ro
+    environment:
+      MUSELY_AGENT_ORCHESTRATOR: docker
+      MUSELY_AGENT_IMAGE: musely-agent:local
+      MUSELY_AGENT_NETWORK: musely-net
+      MUSELY_AGENT_PLATFORM_MOUNT: /opt/musely-agent-platform
+      MUSELY_AGENT_PLATFORM_HOST_DIR: ${MUSELY_AGENT_PLATFORM_HOST_DIR}
+      DB_PATH: /app/data/musely.db
+      HOST: 0.0.0.0
+      PORT: 8081
+    networks:
+      - musely-net
+    restart: unless-stopped
+
+volumes:
+  backend_node_modules:
+
+networks:
+  musely-net:
+    name: musely-net
+    external: true

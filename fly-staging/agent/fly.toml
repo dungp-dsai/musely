@@ -15,7 +15,7 @@ primary_region = "sin"
 # Any env vars shared across ALL user machines can go here so they are
 # baked into the app's default process config.
 [env]
-  API_SERVER_HOST = "0.0.0.0"
+  API_SERVER_HOST = "::"
   API_SERVER_PORT = "8642"
 
 # Secrets: copy secrets.env.example → secrets.env, then:
