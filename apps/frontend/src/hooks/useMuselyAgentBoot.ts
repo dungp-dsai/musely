@@ -4,9 +4,6 @@ import { api, type User } from "../api";
 export type MuselyAgentBootPhase = "idle" | "checking" | "preparing" | "ready" | "error";
 export type MuselyAgentBootMode = "first" | "wakeup";
 
-const POLL_MS = 4000;
-const MAX_POLLS = 90;
-
 /** Expected first boot ~60s; wake-up ~25s. Creeps toward 99% after that, never 100% while loading. */
 export const BOOT_PROGRESS_CAP = 99;
 const BOOT_EXPECTED_MS = { first: 60_000, wakeup: 25_000 } as const;
@@ -76,21 +73,16 @@ export function useMuselyAgentBoot(user: User | null, enabled = true) {
 
         if (!cancelled) setPhase("preparing");
 
-        for (let i = 0; i < MAX_POLLS; i++) {
-          if (cancelled) return;
-          const res = await api.ensureMuselyAgentInstance();
-          if (res.ready) {
-            if (!cancelled) setPhase("ready");
-            return;
-          }
-          if (res.error) {
-            if (!cancelled) {
-              setError(res.error);
-              setPhase("error");
-            }
-            return;
-          }
-          await new Promise((r) => setTimeout(r, POLL_MS));
+        const res = await api.ensureMuselyAgentInstance();
+        if (cancelled) return;
+        if (res.ready) {
+          setPhase("ready");
+          return;
+        }
+        if (res.error) {
+          setError(res.error);
+          setPhase("error");
+          return;
         }
 
         if (!cancelled) {

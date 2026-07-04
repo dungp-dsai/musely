@@ -70,6 +70,51 @@ function normalizeAgentMachineConfig(config) {
   return out;
 }
 
+function machineNeedsHermesRepair(config) {
+  if (!config) return true;
+  const image = String(config.image || "");
+  if (image.includes("alpine") || image.endsWith(FLY_SYNC_IMAGE)) return true;
+  if (config.init?.exec) return true;
+  if (typeof config.init?.cmd === "string") return true;
+  return JSON.stringify(normalizeInitCmd(config.init?.cmd)) !== JSON.stringify(GATEWAY_CMD);
+}
+
+async function quickHealthCheck(machineId) {
+  const url = `http://${machineId}.vm.${FLY_AGENT_APP}.internal:${MUSELY_AGENT_PORT}/health`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Fix alpine / broken cmd left from old sync flows — stop + update config, never destroy. */
+async function repairHermesMachine(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config || !machineNeedsHermesRepair(machine.config)) return;
+
+  console.log(`[orchestrator] repairing machine ${machineId} (restore Hermes image/cmd)`);
+  const wasRunning = isMachineRunning(machine.state);
+  if (wasRunning) {
+    await stopMachine(machineId);
+    await waitForMachineState(machineId, "stopped", 120);
+  }
+
+  await updateMachineConfig(
+    machineId,
+    normalizeAgentMachineConfig({
+      ...machine.config,
+      env: {
+        ...(machine.config.env || {}),
+        API_SERVER_HOST: "::",
+        HERMES_GATEWAY_NO_SUPERVISE: "1",
+      },
+    }),
+    { launch: false }
+  );
+}
+
 // Coalesce concurrent ensure() calls per user.
 const inflight = new Map();
 
@@ -600,7 +645,26 @@ export function ensureInstance(userId) {
     logStep("provisioned");
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
-    const state = await getMachineState(machineId);
+    let state = await getMachineState(machineId);
+    if (isTransitionalMachineState(state)) {
+      logStep(`waiting for machine (was ${state})`);
+      state = await waitForMachineStable(machineId, 180);
+    }
+
+    await repairHermesMachine(machineId);
+    state = await getMachineState(machineId);
+
+    if (state === "started" && (await quickHealthCheck(machineId))) {
+      logStep("already healthy");
+      await touchInstance(userId);
+      return {
+        baseUrl: baseUrlForMachine(machineId),
+        apiKey,
+        machineId,
+        machineName,
+        containerName: machineId,
+      };
+    }
 
     if (state === "destroyed" || state === "missing") {
       // Machine was deleted externally; recreate it (volume persists). Boots on create.
@@ -621,8 +685,9 @@ export function ensureInstance(userId) {
       await setInstanceStatus(userId, "starting");
       await ensureMachineGatewayCmd(machineId);
       await startMachine(machineId);
+    } else if (state === "started") {
+      logStep("started but not healthy yet — waiting for gateway");
     }
-    // state === "started" → already running, fall through to health check
 
     await waitForMachineState(machineId, "started", 120);
     logStep(`machine started (${machineId})`);
