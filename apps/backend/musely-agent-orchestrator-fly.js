@@ -337,13 +337,30 @@ async function waitForMachineState(machineId, state, totalTimeoutSec = 60) {
 
 // ---------- Exported orchestrator primitives ----------
 
+/** Fly exec API accepts cmd as a single shell string, not argv[]. */
+function shellQuoteSingle(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+function argvToFlyCmd(argv) {
+  if (typeof argv === "string") return argv;
+  if (!Array.isArray(argv) || argv.length === 0) {
+    throw new Error("exec argv must be a non-empty array or string");
+  }
+  if (argv[0] === "sh" && argv[1] === "-c") {
+    const script = argv.slice(2).join(" ");
+    return `sh -c ${shellQuoteSingle(script)}`;
+  }
+  return argv.map(shellQuoteSingle).join(" ");
+}
+
 /** Exec a command inside a running machine. Returns stdout string. */
 export async function execInContainer(machineId, argv, opts = {}) {
   const timeoutSec = opts.timeoutMs ? Math.ceil(opts.timeoutMs / 1000) : 30;
   const result = await flyRequest(
     "POST",
     `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/exec`,
-    { cmd: argv, timeout: timeoutSec }
+    { cmd: argvToFlyCmd(argv), timeout: timeoutSec }
   );
   if (result?.exit_code !== 0) {
     throw new Error(result?.stderr?.trim() || `exec exited with code ${result?.exit_code}`);
