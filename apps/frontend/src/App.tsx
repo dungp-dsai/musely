@@ -151,6 +151,7 @@ export default function App() {
     return (
       <MuselyAgentBootScreen
         user={user}
+        phase={agentPhase}
         error={agentPhase === "error" ? agentError : null}
         onRetry={agentPhase === "error" ? retryAgent : undefined}
       />
