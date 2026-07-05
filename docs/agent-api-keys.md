@@ -18,7 +18,9 @@ First boot → `POST /api/musely-agent/instance/ensure` → `provisionInstance(u
 ## What each key does
 
 - **`API_SERVER_KEY`** — Musely backend/frontend → user's agent (`:8642`, chat/models).
-- **`AGENT_API_KEY`** — User's agent → Musely backend (`X-Agent-Key` on `/api/active`, feedback, reports). Same key for all agents; user is identified by `AGENT_USER_ID` on the machine.
+- **`AGENT_API_KEY`** — User's agent → Musely backend (`X-Agent-Key` on `/api/active`, feedback, reports). Same key for all agents.
+- **`X-Agent-User-Id`** — Sent on every agent → backend request; must match `AGENT_USER_ID` on that machine. The backend uses it to scope data (`WHERE user_id = ?`).
+- **Dev shortcut** — If the backend has `AGENT_USER_ID` set in its own env, the header is optional (single-user local dev only).
 
 ## Ops
 

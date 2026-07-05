@@ -89,9 +89,44 @@ CREATE TABLE IF NOT EXISTS waitlist (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- Personalized home feed. Populated when a user asks their agent to ingest
--- content for their chosen topics. `kind` distinguishes reading material from
--- writing prompts/ideas.
+-- Personalized home feed posts (news-style cards for the Feed tab).
+-- Populated by the user's Musely agent via POST /api/feed/posts.
+CREATE TABLE IF NOT EXISTS feed_posts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic           TEXT NOT NULL DEFAULT '',
+  title           TEXT NOT NULL,
+  whats_new       TEXT NOT NULL DEFAULT '',
+  why_it_matters  TEXT NOT NULL DEFAULT '',
+  -- JSON array: [{ "label": string, "url": string }]
+  sources         TEXT NOT NULL DEFAULT '[]',
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS feed_post_reactions (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id     INTEGER NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+  reaction    TEXT NOT NULL CHECK (reaction IN ('up', 'down')),
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  PRIMARY KEY (user_id, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS feed_post_feedback (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id     INTEGER NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+  content     TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS feed_user_prefs (
+  user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  skip_feedback_prompt INTEGER NOT NULL DEFAULT 0,
+  updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Legacy table (pre–feed-posts migration). Kept so existing DBs upgrade cleanly.
 CREATE TABLE IF NOT EXISTS feed_items (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -125,6 +160,8 @@ CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
 CREATE INDEX IF NOT EXISTS idx_ai_task_work_task ON ai_task_work(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_job_reports_post ON ai_job_reports(post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_task_chat_task ON ai_task_chat(task_id);
+CREATE INDEX IF NOT EXISTS idx_feed_posts_user ON feed_posts(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feed_post_feedback_post ON feed_post_feedback(post_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_items_user ON feed_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_waitlist_created ON waitlist(created_at);
 

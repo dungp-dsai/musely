@@ -10,12 +10,18 @@ export type Conversation = {
 const LEGACY_KEY = "writer-app-hermes-chats";
 
 function storageKey(userId: number) {
+  return `musely-agent-chats-u${userId}`;
+}
+
+function legacyStorageKey(userId: number) {
   return `writer-app-hermes-chats-u${userId}`;
 }
 
 export function loadConversations(userId: number): Conversation[] {
   try {
-    const raw = localStorage.getItem(storageKey(userId));
+    const raw =
+      localStorage.getItem(storageKey(userId)) ??
+      localStorage.getItem(legacyStorageKey(userId));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Conversation[];
     return Array.isArray(parsed) ? parsed.sort((a, b) => b.updatedAt - a.updatedAt) : [];

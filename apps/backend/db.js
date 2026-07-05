@@ -56,6 +56,82 @@ function runMigrations() {
       "CREATE INDEX IF NOT EXISTS idx_musely_agent_instances_active ON musely_agent_instances(last_active_at)"
     );
   }
+
+  migrateFeedPosts();
+}
+
+function migrateFeedPosts() {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+    .all()
+    .map((r) => r.name);
+
+  if (!tables.includes("feed_posts")) {
+    db.exec(`
+      CREATE TABLE feed_posts (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        topic           TEXT NOT NULL DEFAULT '',
+        title           TEXT NOT NULL,
+        whats_new       TEXT NOT NULL DEFAULT '',
+        why_it_matters  TEXT NOT NULL DEFAULT '',
+        sources         TEXT NOT NULL DEFAULT '[]',
+        created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE feed_post_reactions (
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        post_id     INTEGER NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+        reaction    TEXT NOT NULL CHECK (reaction IN ('up', 'down')),
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (user_id, post_id)
+      );
+      CREATE TABLE feed_post_feedback (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        post_id     INTEGER NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+        content     TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE feed_user_prefs (
+        user_id              INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        skip_feedback_prompt INTEGER NOT NULL DEFAULT 0,
+        updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_feed_posts_user ON feed_posts(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_feed_post_feedback_post ON feed_post_feedback(post_id, created_at DESC);
+    `);
+  }
+
+  if (tables.includes("feed_items")) {
+    const count = db.prepare("SELECT COUNT(*) AS n FROM feed_posts").get()?.n ?? 0;
+    if (count === 0) {
+      const legacy = db.prepare("SELECT * FROM feed_items ORDER BY created_at ASC, id ASC").all();
+      const insert = db.prepare(
+        `INSERT INTO feed_posts (user_id, topic, title, whats_new, why_it_matters, sources, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const row of legacy) {
+        const sources = row.url
+          ? JSON.stringify([{ label: row.title, url: row.url }])
+          : "[]";
+        insert.run(
+          row.user_id,
+          row.topic || "",
+          row.title,
+          row.summary || "",
+          row.kind === "write" ? "A writing prompt based on your interests." : "",
+          sources,
+          row.created_at
+        );
+      }
+    }
+  }
+
+  // Remove legacy onboarding placeholder posts (from old starter ingest).
+  db.prepare("DELETE FROM feed_posts WHERE title = ?").run(
+    "Tell us what you're into to personalize your feed"
+  );
 }
 
 function nowIso() {
@@ -125,6 +201,23 @@ export async function setUserOnboarding(userId, topics) {
     .prepare(
       `UPDATE users SET onboarded = 1, topics = ? WHERE id = ? RETURNING *`
     )
+    .get(payload, userId);
+  return row ?? null;
+}
+
+export async function getUserPreferences(userId) {
+  const user = await getUserById(userId);
+  if (!user) return null;
+  return {
+    onboarded: Boolean(user.onboarded),
+    topics: parseUserTopics(user.topics),
+  };
+}
+
+export async function updateUserTopics(userId, topics) {
+  const payload = JSON.stringify(parseUserTopics(topics));
+  const row = db
+    .prepare(`UPDATE users SET topics = ? WHERE id = ? RETURNING *`)
     .get(payload, userId);
   return row ?? null;
 }
@@ -600,42 +693,202 @@ export async function getTaskThread(taskId, userId) {
 
 // ---------- Home feed ----------
 
-export async function listFeedItems(userId) {
-  return db
+function parseFeedSources(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((s) => ({
+        label: String(s?.label || "").trim(),
+        url: String(s?.url || "").trim(),
+      }))
+      .filter((s) => s.label || s.url)
+      .slice(0, 20);
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeFeedPostInput(item) {
+  const title = String(item?.title || "").trim();
+  if (!title) return null;
+
+  let sources = [];
+  if (Array.isArray(item?.sources)) {
+    sources = item.sources
+      .map((s) => ({
+        label: String(s?.label || s?.title || "").trim(),
+        url: String(s?.url || "").trim(),
+      }))
+      .filter((s) => s.label || s.url)
+      .slice(0, 20);
+  }
+  if (!sources.length && item?.url) {
+    sources.push({ label: title, url: String(item.url).trim() });
+  }
+
+  return {
+    topic: String(item?.topic || "").trim().slice(0, 200),
+    title: title.slice(0, 500),
+    whats_new: String(item?.whats_new || item?.whatsNew || item?.summary || "").trim().slice(0, 8000),
+    why_it_matters: String(item?.why_it_matters || item?.whyItMatters || "").trim().slice(0, 8000),
+    sources: JSON.stringify(sources),
+  };
+}
+
+export function serializeFeedPost(row, reaction = null) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    topic: row.topic || "",
+    title: row.title,
+    whats_new: row.whats_new || "",
+    why_it_matters: row.why_it_matters || "",
+    sources: parseFeedSources(row.sources),
+    created_at: row.created_at,
+    reaction: reaction === "up" || reaction === "down" ? reaction : null,
+  };
+}
+
+export async function listFeedPosts(userId, { limit = 20, offset = 0 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const rows = db
     .prepare(
-      "SELECT * FROM feed_items WHERE user_id = ? ORDER BY created_at DESC, id DESC"
+      `SELECT fp.*, fpr.reaction
+       FROM feed_posts fp
+       LEFT JOIN feed_post_reactions fpr
+         ON fpr.post_id = fp.id AND fpr.user_id = ?
+       WHERE fp.user_id = ?
+       ORDER BY fp.created_at DESC, fp.id DESC
+       LIMIT ? OFFSET ?`
     )
-    .all(userId);
+    .all(userId, userId, safeLimit, safeOffset);
+  return rows.map((row) => serializeFeedPost(row, row.reaction));
 }
 
-export async function countFeedItems(userId) {
-  return db.prepare("SELECT COUNT(*) AS n FROM feed_items WHERE user_id = ?").get(userId)?.n ?? 0;
+export async function getFeedPost(userId, postId) {
+  const row = db
+    .prepare(
+      `SELECT fp.*, fpr.reaction
+       FROM feed_posts fp
+       LEFT JOIN feed_post_reactions fpr
+         ON fpr.post_id = fp.id AND fpr.user_id = ?
+       WHERE fp.user_id = ? AND fp.id = ?`
+    )
+    .get(userId, userId, postId);
+  return serializeFeedPost(row, row?.reaction);
 }
 
-export async function addFeedItems(userId, items) {
+export async function countFeedPosts(userId) {
+  return db.prepare("SELECT COUNT(*) AS n FROM feed_posts WHERE user_id = ?").get(userId)?.n ?? 0;
+}
+
+export async function addFeedPosts(userId, items) {
   const insert = db.prepare(
-    `INSERT INTO feed_items (user_id, topic, kind, title, summary, url)
+    `INSERT INTO feed_posts (user_id, topic, title, whats_new, why_it_matters, sources)
      VALUES (?, ?, ?, ?, ?, ?)`
   );
   const inserted = [];
   for (const item of items || []) {
-    const title = String(item?.title || "").trim();
-    if (!title) continue;
+    const normalized = normalizeFeedPostInput(item);
+    if (!normalized) continue;
     const { lastInsertRowid } = insert.run(
       userId,
-      String(item?.topic || "").trim(),
-      item?.kind === "write" ? "write" : "read",
-      title,
-      String(item?.summary || "").trim(),
-      item?.url ? String(item.url).trim() : null
+      normalized.topic,
+      normalized.title,
+      normalized.whats_new,
+      normalized.why_it_matters,
+      normalized.sources
     );
-    inserted.push(db.prepare("SELECT * FROM feed_items WHERE id = ?").get(Number(lastInsertRowid)));
+    inserted.push(
+      serializeFeedPost(
+        db.prepare("SELECT * FROM feed_posts WHERE id = ?").get(Number(lastInsertRowid))
+      )
+    );
   }
   return inserted;
 }
 
+export async function clearFeedPosts(userId) {
+  db.prepare("DELETE FROM feed_posts WHERE user_id = ?").run(userId);
+}
+
+export async function setFeedPostReaction(userId, postId, reaction) {
+  const post = db
+    .prepare("SELECT id FROM feed_posts WHERE id = ? AND user_id = ?")
+    .get(postId, userId);
+  if (!post) return null;
+
+  if (!reaction) {
+    db.prepare("DELETE FROM feed_post_reactions WHERE user_id = ? AND post_id = ?").run(
+      userId,
+      postId
+    );
+    return getFeedPost(userId, postId);
+  }
+
+  const value = reaction === "down" ? "down" : "up";
+  db.prepare(
+    `INSERT INTO feed_post_reactions (user_id, post_id, reaction, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, post_id) DO UPDATE SET
+       reaction = excluded.reaction,
+       updated_at = excluded.updated_at`
+  ).run(userId, postId, value, nowIso());
+  return getFeedPost(userId, postId);
+}
+
+export async function addFeedPostFeedback(userId, postId, content) {
+  const post = db
+    .prepare("SELECT id FROM feed_posts WHERE id = ? AND user_id = ?")
+    .get(postId, userId);
+  if (!post) return null;
+  const text = String(content || "").trim();
+  if (!text) return null;
+
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO feed_post_feedback (user_id, post_id, content)
+       VALUES (?, ?, ?)`
+    )
+    .run(userId, postId, text.slice(0, 4000));
+
+  return db.prepare("SELECT * FROM feed_post_feedback WHERE id = ?").get(Number(lastInsertRowid));
+}
+
+export async function getFeedUserPrefs(userId) {
+  const row = db.prepare("SELECT * FROM feed_user_prefs WHERE user_id = ?").get(userId);
+  return {
+    skip_feedback_prompt: Boolean(row?.skip_feedback_prompt),
+    updated_at: row?.updated_at ?? null,
+  };
+}
+
+export async function updateFeedUserPrefs(userId, { skip_feedback_prompt }) {
+  db.prepare(
+    `INSERT INTO feed_user_prefs (user_id, skip_feedback_prompt, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       skip_feedback_prompt = excluded.skip_feedback_prompt,
+       updated_at = excluded.updated_at`
+  ).run(userId, skip_feedback_prompt ? 1 : 0, nowIso());
+  return getFeedUserPrefs(userId);
+}
+
+// Legacy aliases (older ingest path)
+export async function listFeedItems(userId) {
+  return listFeedPosts(userId, { limit: 100 });
+}
+
+export async function countFeedItems(userId) {
+  return countFeedPosts(userId);
+}
+
 export async function clearFeedItems(userId) {
-  db.prepare("DELETE FROM feed_items WHERE user_id = ?").run(userId);
+  return clearFeedPosts(userId);
 }
 
 export default db;

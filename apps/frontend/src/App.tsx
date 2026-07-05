@@ -243,7 +243,7 @@ export default function App() {
 
       <div className="home-body">
         {view === "feed" ? (
-          <FeedView user={user} onGoWrite={() => setView("write")} />
+          <FeedView user={user} />
         ) : (
           <div className="app">
             <Sidebar

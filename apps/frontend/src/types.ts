@@ -81,6 +81,41 @@ export interface UserTopics {
   read: string[];
 }
 
+export interface UserPreferences {
+  onboarded: boolean;
+  topics: UserTopics;
+}
+
+export interface FeedSource {
+  label: string;
+  url: string;
+}
+
+export interface FeedPost {
+  id: number;
+  user_id: number;
+  topic: string;
+  title: string;
+  whats_new: string;
+  why_it_matters: string;
+  sources: FeedSource[];
+  created_at: string;
+  reaction: "up" | "down" | null;
+}
+
+export interface FeedListResponse {
+  posts: FeedPost[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface FeedUserPrefs {
+  skip_feedback_prompt: boolean;
+  updated_at: string | null;
+}
+
+/** @deprecated Use FeedPost */
 export interface FeedItem {
   id: number;
   user_id: number;

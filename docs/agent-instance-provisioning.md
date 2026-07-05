@@ -19,7 +19,10 @@ Machine env at create (from backend secrets, not DB):
 - `API_SERVER_KEY` — per-user (from step 2)
 - `AGENT_API_KEY` — shared platform secret
 - `AGENT_USER_ID` — user id
+- `CLIENT_URL` — Musely API base URL for agent callbacks (`{CLIENT_URL}/api/...`). Production: public app URL (nginx proxies `/api`). Local Docker: `http://musely-backend:8081` (auto).
 - Optional LLM keys from backend `process.env` (Fly secrets)
+
+On every `ensureInstance`, the same three Musely API vars are written to the agent environment (container env + `/opt/data/.env` for the gateway).
 
 ## What gets synced (`/opt/data`)
 

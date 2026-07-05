@@ -18,6 +18,7 @@ import {
 import {
   buildPlatformSyncShell,
   buildPlatformSyncVerifyShell,
+  buildMuselyApiEnvShell,
   createPlatformTarBuffer,
   chunkBase64,
   platformDirOrThrow,
@@ -25,6 +26,7 @@ import {
   needsPlatformFiles,
   SYNC_SECTIONS,
 } from "./musely-agent-platform-sync-runner.js";
+import { getMuselyAgentApiEnv } from "./musely-agent-api-env.js";
 
 // Fly strips FLY_API_TOKEN from app runtime (reserved for flyctl/CI). Use MACHINES_API_TOKEN.
 function machinesApiToken() {
@@ -223,16 +225,18 @@ async function createVolume(userId) {
 }
 
 function machineConfig({ volumeId, apiKey, userId }) {
+  const muselyApi = getMuselyAgentApiEnv(userId);
   const env = {
     API_SERVER_ENABLED: "true",
     API_SERVER_HOST: "::",
     API_SERVER_PORT: String(MUSELY_AGENT_PORT),
     API_SERVER_KEY: apiKey,
     API_SERVER_MODEL_NAME: process.env.MUSELY_AGENT_API_MODEL_NAME || "Musely Agent",
-    AGENT_USER_ID: String(userId),
+    AGENT_USER_ID: muselyApi.AGENT_USER_ID,
+    CLIENT_URL: muselyApi.CLIENT_URL,
+    AGENT_API_KEY: muselyApi.AGENT_API_KEY,
     HERMES_GATEWAY_NO_SUPERVISE: "1",
   };
-  if (process.env.AGENT_API_KEY) env.AGENT_API_KEY = process.env.AGENT_API_KEY;
   for (const key of [
     "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -343,6 +347,28 @@ export async function syncPlatformToUserVolume(userId, { sections, stopAfterSync
     await execOnAgentVolume(machineId, verifyScript, { timeoutMs: 60_000 });
   } finally {
     if (startedForSync && stopAfterSync) {
+      await stopMachine(machineId);
+      await waitForMachineState(machineId, "stopped", 120);
+      await setInstanceStatus(userId, "stopped");
+    }
+  }
+}
+
+/** Write Musely API credentials into /opt/data/.env on the user's volume. */
+async function syncMuselyApiEnvToUserVolume(userId, { restartGateway = false } = {}) {
+  const instance = await getInstance(userId);
+  const machineId = instance?.machine_id;
+  if (!machineId) return;
+
+  const script = buildMuselyApiEnvShell({ dataPath: "/opt/data", userId });
+  const startedForSync = await ensureMachineRunningForOps(machineId);
+  try {
+    await execOnAgentVolume(machineId, script, { timeoutMs: 60_000 });
+    if (restartGateway && isMachineRunning(await getMachineState(machineId))) {
+      await execInContainer(machineId, ["hermes", "gateway", "restart"]);
+    }
+  } finally {
+    if (startedForSync) {
       await stopMachine(machineId);
       await waitForMachineState(machineId, "stopped", 120);
       await setInstanceStatus(userId, "stopped");
@@ -681,6 +707,10 @@ export function ensureInstance(userId) {
 
     let instance = await provisionInstance(userId);
     logStep("provisioned");
+
+    await syncMuselyApiEnvToUserVolume(userId);
+    logStep("musely api env synced");
+
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
     let state = await getMachineState(machineId);
@@ -693,6 +723,7 @@ export function ensureInstance(userId) {
     state = await getMachineState(machineId);
 
     if (state === "started" && (await quickHealthCheck(machineId))) {
+      await syncMuselyApiEnvToUserVolume(userId, { restartGateway: true });
       logStep("already healthy");
       await touchInstance(userId);
       return {
