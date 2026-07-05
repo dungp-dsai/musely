@@ -269,9 +269,23 @@ async function createMachine({ machineName, volumeId, apiKey, userId }) {
   return machine;
 }
 
+/** Start machine if needed for volume exec; returns true when this call started it. */
+async function ensureMachineRunningForOps(machineId) {
+  let state = await getMachineState(machineId);
+  if (isTransitionalMachineState(state)) {
+    state = await waitForMachineStable(machineId, 120);
+  }
+  if (isMachineRunning(state)) return false;
+  await ensureMachineGatewayCmd(machineId);
+  if (state === "created") await launchMachine(machineId);
+  else await startMachine(machineId);
+  await waitForMachineState(machineId, "started", 120);
+  return true;
+}
+
 /** Sync selected platform parts from backend storage into user volume.
  *  Never replaces or destroys the user machine — only stop/start + exec on the same machine ID. */
-export async function syncPlatformToUserVolume(userId, { sections } = {}) {
+export async function syncPlatformToUserVolume(userId, { sections, stopAfterSync = true } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
   if (!machineId) throw new Error("No agent machine for user — provision first");
@@ -287,15 +301,7 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     sections: normalized,
   });
 
-  let startedForSync = false;
-  const state = await getMachineState(machineId);
-  if (!isMachineRunning(state)) {
-    await ensureMachineGatewayCmd(machineId);
-    if (state === "created") await launchMachine(machineId);
-    else await startMachine(machineId);
-    await waitForMachineState(machineId, "started", 120);
-    startedForSync = true;
-  }
+  const startedForSync = await ensureMachineRunningForOps(machineId);
 
   try {
     if (needsPlatformFiles(normalized)) {
@@ -336,7 +342,7 @@ export async function syncPlatformToUserVolume(userId, { sections } = {}) {
     console.log(`[orchestrator] platform sync user=${userId}: ${out.trim()}`);
     await execOnAgentVolume(machineId, verifyScript, { timeoutMs: 60_000 });
   } finally {
-    if (startedForSync) {
+    if (startedForSync && stopAfterSync) {
       await stopMachine(machineId);
       await waitForMachineState(machineId, "stopped", 120);
       await setInstanceStatus(userId, "stopped");
@@ -351,6 +357,25 @@ export async function restartUserAgentIfRunning(userId, { sections: _sections } 
   const state = await getMachineState(machineId);
   if (!isMachineRunning(state)) return;
   await execInContainer(machineId, ["hermes", "gateway", "restart"]);
+}
+
+/** After admin sync: keep machine running and optionally reload gateway config. */
+export async function restartUserAgentAfterSync(userId, { restartGateway = true } = {}) {
+  const instance = await getInstance(userId);
+  const machineId = instance?.machine_id;
+  if (!machineId) throw new Error("No agent machine for user — provision first");
+
+  await ensureMachineRunningForOps(machineId);
+
+  if (restartGateway) {
+    await execInContainer(machineId, ["hermes", "gateway", "restart"]);
+  }
+
+  const state = await getMachineState(machineId);
+  if (!isMachineRunning(state)) {
+    throw new Error(`Agent machine not running after sync (state=${state})`);
+  }
+  await touchInstance(userId);
 }
 
 /** /start only works from "stopped". Machines in "created" must be launched via update. */

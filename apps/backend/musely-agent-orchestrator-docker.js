@@ -145,6 +145,23 @@ export async function restartUserAgentIfRunning(userId, { sections } = {}) {
   await dockerQuiet(["exec", ref, "hermes", "gateway", "restart"]);
 }
 
+/** After admin sync: reload gateway only when the container is already running.
+ *  Volume sync uses a transient alpine container — stopped agents still get updated files. */
+export async function restartUserAgentAfterSync(userId, { restartGateway = true } = {}) {
+  const instance = await getInstance(userId);
+  const ref = instance?.machine_name || instance?.machine_id;
+  if (!ref) throw new Error("No agent container for user — provision first");
+
+  const state = await getContainerState(ref);
+  if (state === "missing") {
+    throw new Error("Agent container missing — provision first");
+  }
+  if (!isMachineRunning(state) || !restartGateway) return;
+
+  await dockerQuiet(["exec", ref, "hermes", "gateway", "restart"]);
+  await touchInstance(userId);
+}
+
 // ---------- Naming ----------
 
 export function machineNameForUser(userId, userName) {
