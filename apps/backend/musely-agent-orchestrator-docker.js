@@ -20,6 +20,7 @@ import {
   buildPlatformSyncShell,
   normalizeSyncSections,
   needsPlatformFiles,
+  SYNC_SECTIONS,
 } from "./musely-agent-platform-sync-runner.js";
 import {
   resolvePlatformDirForFs,
@@ -246,7 +247,7 @@ async function createContainer({ containerName, volumeName, apiKey, userId }) {
   await ensureNetwork();
   await ensureVolume(volumeName);
   try {
-    await syncPlatformToUserVolume(userId);
+    await syncPlatformToUserVolume(userId, { sections: SYNC_SECTIONS });
   } catch (err) {
     console.warn(`[orchestrator:docker] platform sync skipped: ${err.message}`);
   }

@@ -23,6 +23,7 @@ import {
   platformDirOrThrow,
   normalizeSyncSections,
   needsPlatformFiles,
+  SYNC_SECTIONS,
 } from "./musely-agent-platform-sync-runner.js";
 
 // Fly strips FLY_API_TOKEN from app runtime (reserved for flyctl/CI). Use MACHINES_API_TOKEN.
@@ -615,13 +616,25 @@ async function provisionInstance(userId) {
   const volumeId = (await findExistingVolume(userId)) || (await createVolume(userId));
   const machine = await createMachine({ machineName, volumeId, apiKey, userId });
 
-  return createInstanceRecord({
+  const record = await createInstanceRecord({
     userId,
     machineName,
     machineId: machine.id,
     volumeId,
     apiKey,
   });
+
+  // Same as Docker createContainer: seed config + skills + secrets onto /opt/data.
+  try {
+    await syncPlatformToUserVolume(userId, { sections: SYNC_SECTIONS });
+    console.log(
+      `[orchestrator] platform seed sync (config, skills, secrets) → user=${userId}`
+    );
+  } catch (err) {
+    console.warn(`[orchestrator] platform seed sync skipped (user=${userId}): ${err.message}`);
+  }
+
+  return record;
 }
 
 /**

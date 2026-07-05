@@ -23,3 +23,5 @@ First boot → `POST /api/musely-agent/instance/ensure` → `provisionInstance(u
 ## Ops
 
 Set `AGENT_API_KEY` once in `fly-staging/backend/secrets.env` (and match `fly-staging/agent/secrets.env` if used there). Never rotate per user.
+
+See also [agent-instance-provisioning.md](agent-instance-provisioning.md) for new-instance seed + admin sync.

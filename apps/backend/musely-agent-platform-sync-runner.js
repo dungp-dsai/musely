@@ -95,7 +95,7 @@ export function buildPlatformSyncVerifyShell({
       '[ -n "$(ls -A "$DATA/skills/musely" 2>/dev/null)" ] || { echo "verify: $DATA/skills/musely is empty" >&2; exit 1; }'
     );
   }
-  if (set.has("secrets")) {
+  if (set.has("secrets") && Object.keys(getPlatformEnvMap()).length > 0) {
     lines.push('[ -s "$DATA/.env" ] || { echo "verify: missing or empty $DATA/.env" >&2; exit 1; }');
   }
 
