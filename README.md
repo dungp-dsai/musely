@@ -160,6 +160,8 @@ Key design decisions:
 
 ## Agent API (Musely agent integration)
 
+See [docs/agent-api-keys.md](docs/agent-api-keys.md) for `AGENT_API_KEY` vs `API_SERVER_KEY`.
+
 Musely agent machines call back into the backend using `X-Agent-Key: <AGENT_API_KEY>`. The key endpoints:
 
 ```
