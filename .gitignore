@@ -18,3 +18,8 @@ apps/**/.env
 fly-*/**/secrets.env
 
 .DS_Store
+
+TODO.md
+
+# Local dev-only scripts
+dev-script/

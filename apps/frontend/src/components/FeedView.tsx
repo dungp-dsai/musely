@@ -71,11 +71,7 @@ export default function FeedView({ user }: Props) {
 
     (async () => {
       try {
-        const posts = await load();
-        if (cancelled) return;
-        if (posts.length === 0) {
-          await refresh();
-        }
+        await load();
       } catch (e) {
         if (!cancelled) setError(toUserFacingError((e as Error).message, FEED_REFRESH_FAILED));
         if (!cancelled) setItems([]);
@@ -85,15 +81,20 @@ export default function FeedView({ user }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [load, refresh]);
+  }, [load]);
 
   const retryRefresh = () => {
     setBootKey((k) => k + 1);
     void refresh();
   };
 
+  const firstName = user.name?.split(/\s+/)[0]?.trim();
   const interests = (user.topics?.interests ?? "").trim();
   const readTopics = user.topics?.read ?? [];
+  const writeTopics = user.topics?.write ?? [];
+  const topicChips = Array.from(
+    new Set([...readTopics, ...writeTopics].map((t) => t.trim()).filter(Boolean))
+  ).slice(0, 6);
   const topicLabel = interests
     ? interests.length > 90
       ? `${interests.slice(0, 90)}…`
@@ -126,6 +127,72 @@ export default function FeedView({ user }: Props) {
     );
   }
 
+  if (items.length === 0) {
+    return (
+      <div className="feed-wrap">
+        {displayError && (
+          <div className="error-bar" onClick={() => setError(null)}>
+            {displayError}
+          </div>
+        )}
+        <div className="feed-empty">
+          <div className="feed-empty-inner">
+            <div className="feed-empty-mark" aria-hidden>
+              <span className="feed-empty-mark-glyph">M</span>
+              <span className="feed-empty-mark-ring" />
+              <span className="feed-empty-mark-ring" />
+            </div>
+
+            <p className="feed-empty-eyebrow">
+              {firstName ? `Welcome, ${firstName}` : "Welcome to Musely"}
+            </p>
+            <h1 className="feed-empty-title">Your feed is a blank page.</h1>
+            <p className="feed-empty-lede">
+              {topicChips.length > 0 ? (
+                <>Would you like me to find stories about the topics you love?</>
+              ) : (
+                <>
+                  Would you like me to find stories about{" "}
+                  <strong>{topicLabel}</strong>?
+                </>
+              )}
+            </p>
+
+            {topicChips.length > 0 && (
+              <div className="feed-empty-topics">
+                {topicChips.map((topic, i) => (
+                  <span
+                    key={topic}
+                    className="feed-empty-topic"
+                    style={{ animationDelay: `${0.15 + i * 0.06}s` }}
+                  >
+                    {topic}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="feed-empty-cta"
+              onClick={() => void refresh()}
+            >
+              <span className="feed-empty-cta-spark" aria-hidden>
+                ✦
+              </span>
+              Find stories for me
+            </button>
+
+            <p className="feed-empty-hint">
+              I&apos;ll research fresh, relevant posts tuned to your interests
+              — this usually takes about a minute.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="feed-wrap">
       {displayError && (
@@ -138,13 +205,7 @@ export default function FeedView({ user }: Props) {
         <div className="feed-toolbar">
           <div>
             <h2 className="feed-heading">Your feed</h2>
-            <p className="feed-subheading">
-              {items.length === 0 ? (
-                <>No posts yet for {topicLabel}</>
-              ) : (
-                <>Personalized for {topicLabel}</>
-              )}
-            </p>
+            <p className="feed-subheading">Personalized for {topicLabel}</p>
           </div>
           <div className="feed-actions">
             <button type="button" className="btn" onClick={() => void refresh()}>
@@ -152,11 +213,9 @@ export default function FeedView({ user }: Props) {
             </button>
           </div>
         </div>
-        {items.length === 0 ? (
-          <p className="feed-empty">Your agent hasn&apos;t added any posts yet. Tap Refresh to try again.</p>
-        ) : (
-          items.map((post) => <FeedCard key={post.id} post={post} />)
-        )}
+        {items.map((post) => (
+          <FeedCard key={post.id} post={post} />
+        ))}
       </div>
     </div>
   );
