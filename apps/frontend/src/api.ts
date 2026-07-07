@@ -215,6 +215,7 @@ export const api = {
   refreshFeed: async (opts?: {
     signal?: AbortSignal;
     onWarming?: () => void;
+    onActivity?: (line: string) => void;
   }): Promise<void> => {
     const text = await streamMuselyAgentRequest({
       apiBase: API_BASE,
@@ -222,6 +223,7 @@ export const api = {
       body: {},
       signal: opts?.signal,
       onWarming: opts?.onWarming,
+      onLine: opts?.onActivity,
     });
     if (isAgentFailureResponse(text)) {
       throw new Error(FEED_REFRESH_FAILED);

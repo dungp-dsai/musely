@@ -1,30 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type User } from "../api";
-import type { MuselyAgentBootPhase } from "../hooks/useMuselyAgentBoot";
 import { FEED_REFRESH_FAILED, toUserFacingError } from "../lib/userFacingErrors";
 import type { FeedPost } from "../types";
 import FeedCard from "./FeedCard";
-import MuselyAgentBootScreen, { type BootScreenContent } from "./MuselyAgentBootScreen";
+import FeedBuildingScreen from "./FeedBuildingScreen";
 
 interface Props {
   user: User;
 }
 
-const FEED_BOOT_CONTENT: BootScreenContent = {
-  title: "Building your feed",
-  lead: "Your agent is finding stories matched to your interests.",
-  sub: "This may take a minute.",
-  statusChecking: "Connecting to your agent",
-  statusPreparing: "Curating your feed",
-  progressAriaLabel: "Feed refresh progress",
-  errorTitle: "Couldn't refresh your feed",
-};
-
 export default function FeedView({ user }: Props) {
   const [items, setItems] = useState<FeedPost[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [bootPhase, setBootPhase] = useState<MuselyAgentBootPhase>("checking");
-  const [bootKey, setBootKey] = useState(0);
+  const [activity, setActivity] = useState<string[]>([]);
+  const [runKey, setRunKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const refreshInFlight = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -44,12 +33,14 @@ export default function FeedView({ user }: Props) {
 
     setRefreshing(true);
     setError(null);
-    setBootPhase("checking");
+    setActivity([]);
 
     try {
       await api.refreshFeed({
         signal: controller.signal,
-        onWarming: () => setBootPhase("preparing"),
+        onWarming: () =>
+          setActivity((prev) => (prev.length ? prev : ["Waking your agent"])),
+        onActivity: (line) => setActivity((prev) => [...prev, line]),
       });
       const posts = await load();
       if (posts.length === 0) {
@@ -84,8 +75,15 @@ export default function FeedView({ user }: Props) {
   }, [load]);
 
   const retryRefresh = () => {
-    setBootKey((k) => k + 1);
+    setRunKey((k) => k + 1);
     void refresh();
+  };
+
+  const cancelRefresh = () => {
+    abortRef.current?.abort();
+    refreshInFlight.current = false;
+    setRefreshing(false);
+    setActivity([]);
   };
 
   const firstName = user.name?.split(/\s+/)[0]?.trim();
@@ -107,14 +105,13 @@ export default function FeedView({ user }: Props) {
 
   if (refreshing) {
     return (
-      <MuselyAgentBootScreen
-        user={user}
-        phase={bootPhase}
-        bootMode="wakeup"
+      <FeedBuildingScreen
+        activity={activity}
         error={displayError}
         onRetry={retryRefresh}
-        bootKey={bootKey}
-        content={FEED_BOOT_CONTENT}
+        onCancel={cancelRefresh}
+        topicLabel={topicLabel}
+        runKey={runKey}
       />
     );
   }

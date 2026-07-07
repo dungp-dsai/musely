@@ -48,13 +48,12 @@ export function useMuselyAgentBoot(user: User | null, enabled = true) {
           api.getInstanceStatus().catch(() => ({ orchestrator: true, state: "missing" as const })),
         ]);
 
-        if (!cancelled) {
-          setBootMode(
-            instanceStatus.orchestrator && instanceStatus.state !== "missing"
-              ? "wakeup"
-              : "first"
-          );
-        }
+        // The agent already exists for this user (i.e. any login after the very
+        // first one). "missing" means it has never been provisioned.
+        const agentExists =
+          instanceStatus.orchestrator && instanceStatus.state !== "missing";
+
+        if (!cancelled) setBootMode(agentExists ? "wakeup" : "first");
 
         if (!config.orchestratorEnabled) {
           const missing = (config as { orchestratorMissing?: string[] }).orchestratorMissing;
@@ -71,6 +70,15 @@ export function useMuselyAgentBoot(user: User | null, enabled = true) {
           return;
         }
 
+        // Returning users: don't eagerly wake the agent on login (no wake-up
+        // screen). It's woken lazily by the first activity that needs it
+        // (feed refresh, chat, …), which surfaces its own progress UI.
+        if (agentExists) {
+          if (!cancelled) setPhase("ready");
+          return;
+        }
+
+        // First-time only: provision the brand-new agent now.
         if (!cancelled) setPhase("preparing");
 
         const res = await api.ensureMuselyAgentInstance();

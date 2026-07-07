@@ -150,7 +150,10 @@ export default function App() {
     return <OnboardingPage user={user} onComplete={refresh} />;
   }
 
-  if (agentPhase !== "ready") {
+  // Full-screen boot experience only for first-time provisioning or a hard
+  // error. Returning users never see a "waking up" screen — their agent is
+  // woken lazily by the first activity that needs it (feed refresh, chat, …).
+  if (agentPhase === "preparing" || agentPhase === "error") {
     return (
       <MuselyAgentBootScreen
         user={user}
@@ -160,6 +163,18 @@ export default function App() {
         onRetry={agentPhase === "error" ? retryAgent : undefined}
         bootKey={agentBootAttempt}
       />
+    );
+  }
+
+  // Briefly checking agent status (idle/checking): a light neutral loader.
+  if (agentPhase !== "ready") {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-mark">M</div>
+          <p className="login-loading">Loading…</p>
+        </div>
+      </div>
     );
   }
 
