@@ -16,9 +16,12 @@ export function latestVersion(post) {
 
 export async function getActivePostId(userId) {
   const posts = await listPostsForAgent(userId);
-  const active = posts.filter((p) => p.status === "in_progress");
-  if (active.length === 0) return null;
-  return active[0].id;
+  if (!posts.length) return null;
+
+  // Prefer a piece with unfinished feedback; otherwise most recently updated.
+  const withQueue = posts.find((p) => Number(p.pending_feedback) > 0);
+  if (withQueue) return withQueue.id;
+  return posts[0].id;
 }
 
 export function slimActivePost(post) {

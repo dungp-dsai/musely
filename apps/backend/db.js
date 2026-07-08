@@ -372,7 +372,7 @@ export async function listPosts(userId) {
               (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status = 'pending') AS pending_feedback
        FROM posts p
        WHERE p.user_id = ?
-       ORDER BY CASE WHEN p.status = 'in_progress' THEN 0 ELSE 1 END, p.updated_at DESC`
+       ORDER BY p.updated_at DESC`
     )
     .all(userId);
 }
@@ -404,17 +404,6 @@ export async function setPostStatus(id, userId, status) {
   }
   const post = getPostRow(id, userId);
   if (!post) return null;
-
-  if (status === "in_progress" && post.status !== "in_progress") {
-    const conflict = db
-      .prepare(
-        `SELECT id, title FROM posts WHERE status = 'in_progress' AND user_id = ? AND id != ?`
-      )
-      .get(userId, id);
-    if (conflict) {
-      throw new Error(`Only one post can be In Progress. "${conflict.title}" is already active.`);
-    }
-  }
 
   db.prepare("UPDATE posts SET status = ?, updated_at = ? WHERE id = ?").run(
     status,
@@ -470,7 +459,7 @@ export async function listPostsForAgent(userId) {
               (SELECT COUNT(*) FROM versions v WHERE v.post_id = p.id) AS version_count,
               (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status = 'pending') AS pending_feedback
        FROM posts p
-       ORDER BY CASE WHEN p.status = 'in_progress' THEN 0 ELSE 1 END, p.updated_at DESC`
+       ORDER BY p.updated_at DESC`
     )
     .all();
 }

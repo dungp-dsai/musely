@@ -4,7 +4,7 @@ import { api } from "../api";
 import { relativeTime, formatDateTime, htmlToText } from "../utils";
 import DiffView from "./DiffView";
 import Editor from "./Editor";
-import QueuePanel from "./QueuePanel";
+import QueuePanel, { type QueueStartState } from "./QueuePanel";
 import TaskChatPanel from "./TaskChatPanel";
 
 function loadEditorContent(post: Post): string {
@@ -15,11 +15,12 @@ interface Props {
   post: Post;
   onChanged: () => void;
   onDeleted: () => void;
+  onOpenSchedule?: (seed?: { name?: string; prompt?: string }) => void;
 }
 
 type Mode = "editor" | "history";
 
-export default function PostView({ post, onChanged, onDeleted }: Props) {
+export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }: Props) {
   const versions = post.versions; // newest first
   const latest: Version | undefined = versions[0];
 
@@ -33,8 +34,11 @@ export default function PostView({ post, onChanged, onDeleted }: Props) {
   const [focusedFeedbackId, setFocusedFeedbackId] = useState<number | null>(null);
   const [chatTaskId, setChatTaskId] = useState<number | null>(null);
   const [aiPull, setAiPull] = useState<{ id: number; content: string } | null>(null);
+  const [startState, setStartState] = useState<QueueStartState>("idle");
+  const [startError, setStartError] = useState<string | null>(null);
   const persistedDraft = useRef(loadEditorContent(post));
   const autosaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const startAbortRef = useRef<AbortController | null>(null);
 
   // History comparison selection.
   const [toId, setToId] = useState<number | null>(latest?.id ?? null);
@@ -45,6 +49,10 @@ export default function PostView({ post, onChanged, onDeleted }: Props) {
     const content = loadEditorContent(post);
     setDraft(content);
     persistedDraft.current = content;
+    startAbortRef.current?.abort();
+    startAbortRef.current = null;
+    setStartState("idle");
+    setStartError(null);
   }, [post.id]);
 
   // Adopt AI-written versions when the editor matches the last autosaved draft.
@@ -180,6 +188,71 @@ export default function PostView({ post, onChanged, onDeleted }: Props) {
     setQueueOpen(false);
   };
 
+  const startQueueNow = async () => {
+    if (startState === "starting" || startState === "working") return;
+    const pending = post.feedback.filter((f) => f.status !== "done");
+    if (pending.length === 0) return;
+
+    startAbortRef.current?.abort();
+    const controller = new AbortController();
+    startAbortRef.current = controller;
+
+    setStartError(null);
+    setStartState("starting");
+    setQueueOpen(true);
+
+    try {
+      await api.runWritingQueue({
+        postId: post.id,
+        postTitle: post.title || "Untitled",
+        taskCount: pending.length,
+        signal: controller.signal,
+        onWarming: () => setStartState("starting"),
+      });
+
+      if (controller.signal.aborted) return;
+      setStartState("working");
+      onChanged();
+      window.setTimeout(() => {
+        setStartState((s) => (s === "working" ? "idle" : s));
+      }, 4000);
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === "AbortError" || /aborted/i.test(err.message)) return;
+      setStartError(err.message || "Couldn't start the agent. Please try again.");
+      setStartState("error");
+    } finally {
+      if (startAbortRef.current === controller) startAbortRef.current = null;
+    }
+  };
+
+  const openScheduleFromQueue = () => {
+    const pending = post.feedback.filter((f) => f.status !== "done");
+    const title = post.title || "Untitled";
+    const n = pending.length;
+    const taskLines = pending
+      .slice(0, 8)
+      .map((f, i) => `${i + 1}. ${f.content}${f.context ? ` (context: “${f.context.slice(0, 80)}”)` : ""}`)
+      .join("\n");
+    onOpenSchedule?.({
+      name: `Writing queue · ${title}`,
+      prompt: [
+        `Work the AI writing queue for "${title}" (post_id ${post.id}).`,
+        `There ${n === 1 ? "is" : "are"} ${n} queued task${n === 1 ? "" : "s"}.`,
+        ``,
+        `When this job runs, use the do-research skill (API only):`,
+        `1. Set or keep this piece In Progress.`,
+        `2. GET /api/active and GET /api/active/tasks.`,
+        `3. For each task: claim, research, POST findings to /api/feedback/:id/work.`,
+        `4. Do not rewrite the draft or touch the UI. Reply briefly when done.`,
+        ``,
+        taskLines ? `Queued tasks:\n${taskLines}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  };
+
   const restore = async (v: Version) => {
     if (!confirm(`Restore v${v.version_number} as a new version?`)) return;
     await api.addVersion(post.id, {
@@ -307,10 +380,14 @@ export default function PostView({ post, onChanged, onDeleted }: Props) {
               items={activeTasks}
               open={queueOpen}
               selectedId={focusedFeedbackId}
+              startState={startState}
+              startError={startError}
               onToggle={() => setQueueOpen((v) => !v)}
               onSelect={(id) => openTaskChat(id)}
               onDelete={removeFeedback}
               onMarkDone={markFeedbackDone}
+              onStartNow={() => void startQueueNow()}
+              onScheduleLater={openScheduleFromQueue}
             />
           )}
         </div>

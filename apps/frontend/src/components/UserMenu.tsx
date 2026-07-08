@@ -4,7 +4,6 @@ import type { User } from "../api";
 interface Props {
   user: User;
   onOpenProfile: () => void;
-  onOpenChat: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
 }
@@ -12,7 +11,6 @@ interface Props {
 export default function UserMenu({
   user,
   onOpenProfile,
-  onOpenChat,
   onOpenSettings,
   onLogout,
 }: Props) {
@@ -75,10 +73,6 @@ export default function UserMenu({
           <button type="button" role="menuitem" className="user-menu-item" onClick={pick(onOpenProfile)}>
             <span className="user-menu-ico" aria-hidden>👤</span>
             Profile &amp; preferences
-          </button>
-          <button type="button" role="menuitem" className="user-menu-item" onClick={pick(onOpenChat)}>
-            <span className="user-menu-ico" aria-hidden>💬</span>
-            Chat with Musely Agent
           </button>
           <button type="button" role="menuitem" className="user-menu-item" onClick={pick(onOpenSettings)}>
             <span className="user-menu-ico" aria-hidden>🗓️</span>

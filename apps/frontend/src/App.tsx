@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
-import MuselyAgentChat from "./components/MuselyAgentChat";
 import FeedView from "./components/FeedView";
 import UserMenu from "./components/UserMenu";
 import CronSettings from "./pages/CronSettings";
@@ -13,9 +12,9 @@ import MuselyAgentBootScreen from "./components/MuselyAgentBootScreen";
 import { useAuth } from "./auth/AuthContext";
 import { useMuselyAgentBoot } from "./hooks/useMuselyAgentBoot";
 import { api } from "./api";
-import type { Post, PostSummary, PostStatus } from "./types";
+import type { Post, PostSummary } from "./types";
 
-type View = "feed" | "write" | "chat" | "settings" | "profile";
+type View = "feed" | "write" | "settings" | "profile";
 
 const isAdminRoute = () =>
   window.location.pathname.replace(/\/+$/, "").toLowerCase() === "/admin";
@@ -37,6 +36,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [landingNotice, setLandingNotice] = useState<string | null>(null);
   const [adminRoute] = useState(isAdminRoute);
+  const [cronSeed, setCronSeed] = useState<{ name?: string; prompt?: string } | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -108,16 +108,6 @@ export default function App() {
     await loadPosts();
   };
 
-  const changeStatus = async (id: number, status: PostStatus) => {
-    try {
-      await api.updatePost(id, { status });
-      await loadPosts();
-      if (selectedId === id) await loadPost(id);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
   if (adminRoute) {
     return <AdminPage />;
   }
@@ -152,7 +142,7 @@ export default function App() {
 
   // Full-screen boot experience only for first-time provisioning or a hard
   // error. Returning users never see a "waking up" screen — their agent is
-  // woken lazily by the first activity that needs it (feed refresh, chat, …).
+  // woken lazily by the first activity that needs it (feed refresh, writing queue, …).
   if (agentPhase === "preparing" || agentPhase === "error") {
     return (
       <MuselyAgentBootScreen
@@ -179,21 +169,17 @@ export default function App() {
   }
 
   // Full-screen sub-views reachable from the header/sidebar.
-  if (view === "chat") {
-    return (
-      <div className="app app-chat">
-        <main className="main main-chat">
-          <MuselyAgentChat userId={user.id} onBack={() => setView("feed")} />
-        </main>
-      </div>
-    );
-  }
-
   if (view === "settings") {
     return (
       <div className="app app-chat">
         <main className="main main-chat">
-          <CronSettings onBack={() => setView("feed")} />
+          <CronSettings
+            seed={cronSeed}
+            onBack={() => {
+              setCronSeed(null);
+              setView("write");
+            }}
+          />
         </main>
       </div>
     );
@@ -207,8 +193,10 @@ export default function App() {
             user={user}
             onBack={() => setView("feed")}
             onSaved={refresh}
-            onOpenChat={() => setView("chat")}
-            onOpenSettings={() => setView("settings")}
+            onOpenSettings={() => {
+              setCronSeed(null);
+              setView("settings");
+            }}
             onLogout={logout}
           />
         </main>
@@ -249,8 +237,10 @@ export default function App() {
           <UserMenu
             user={user}
             onOpenProfile={() => setView("profile")}
-            onOpenChat={() => setView("chat")}
-            onOpenSettings={() => setView("settings")}
+            onOpenSettings={() => {
+              setCronSeed(null);
+              setView("settings");
+            }}
             onLogout={logout}
           />
         </div>
@@ -269,7 +259,6 @@ export default function App() {
                 setSelectedId(id);
               }}
               onCreate={create}
-              onStatusChange={changeStatus}
             />
             <main className="main">
               {error && (
@@ -278,7 +267,15 @@ export default function App() {
                 </div>
               )}
               {post ? (
-                <PostView post={post} onChanged={refreshPosts} onDeleted={handleDeleted} />
+                <PostView
+                  post={post}
+                  onChanged={refreshPosts}
+                  onDeleted={handleDeleted}
+                  onOpenSchedule={(seed) => {
+                    setCronSeed(seed ?? null);
+                    setView("settings");
+                  }}
+                />
               ) : (
                 <div className="placeholder">
                   <div className="placeholder-mark">H</div>

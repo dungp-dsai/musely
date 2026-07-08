@@ -170,8 +170,8 @@ export default function TaskChatPanel({ taskId, feedback, onClose, onMarkDone, o
                   <div className="task-chat-empty-icon">🔍</div>
                   <p>No AI findings yet.</p>
                   <p className="muted small">
-                    Run <code>assist-dungpham</code> or ask Hermes to research this task. You can still chat below
-                    to request work.
+                    Run the agent (Start on the AI queue) or ask Musely to research this task.
+                    Findings will show up here once stored.
                   </p>
                 </div>
               )}

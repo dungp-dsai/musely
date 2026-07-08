@@ -230,6 +230,48 @@ export const api = {
     }
   },
 
+  /**
+   * Hot-pickup: wake the agent (if needed) and ask it to research the writing
+   * queue for the In Progress piece via the do-research skill.
+   */
+  runWritingQueue: async (opts: {
+    postId: number;
+    postTitle: string;
+    taskCount: number;
+    signal?: AbortSignal;
+    onWarming?: () => void;
+  }): Promise<void> => {
+    const n = opts.taskCount;
+    const label = n === 1 ? "1 queued task" : `${n} queued tasks`;
+    const messages = [
+      {
+        role: "user",
+        content: [
+          `The user just hit Start on the AI writing queue.`,
+          ``,
+          `Piece: "${opts.postTitle}" (post_id ${opts.postId}) — already set to In Progress.`,
+          `There ${n === 1 ? "is" : "are"} ${label} waiting.`,
+          ``,
+          `Use the do-research skill to do this correctly (API only):`,
+          `1. GET /api/active and GET /api/active/tasks.`,
+          `2. For each task: claim it, research it, POST findings to /api/feedback/:id/work.`,
+          `3. Do not rewrite the draft or touch the UI.`,
+          `4. Reply with one short confirmation only.`,
+        ].join("\n"),
+      },
+    ];
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: "/api/musely-agent/chat",
+      body: { messages },
+      signal: opts.signal,
+      onWarming: opts.onWarming,
+    });
+    if (isAgentFailureResponse(text)) {
+      throw new Error("Couldn't start your agent on the queue. Please try again.");
+    }
+  },
+
   /** @deprecated Use refreshFeed */
   ingestFeed: (): Promise<{ ok: boolean; source: string; posts: FeedPost[] }> =>
     apiFetch("/api/feed/ingest", {
@@ -329,13 +371,6 @@ export const api = {
     googleAuthEnabled: boolean;
     orchestratorEnabled: boolean;
   }> => apiFetch("/api/config").then(json),
-
-  getMuselyAgentModels: (): Promise<{
-    models: string[];
-    defaultModel?: string | null;
-    gatewayModel?: string;
-    error: string | null;
-  }> => apiFetch("/api/musely-agent/models").then(json),
 
   getCronMeta: (): Promise<{
     enabled: boolean;

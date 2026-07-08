@@ -72,7 +72,7 @@ export function useMuselyAgentBoot(user: User | null, enabled = true) {
 
         // Returning users: don't eagerly wake the agent on login (no wake-up
         // screen). It's woken lazily by the first activity that needs it
-        // (feed refresh, chat, …), which surfaces its own progress UI.
+        // (feed refresh, writing queue, …), which surfaces its own progress UI.
         if (agentExists) {
           if (!cancelled) setPhase("ready");
           return;

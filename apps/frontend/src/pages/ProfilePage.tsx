@@ -5,7 +5,6 @@ interface Props {
   user: User;
   onBack: () => void;
   onSaved: () => Promise<void> | void;
-  onOpenChat: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
 }
@@ -14,7 +13,6 @@ export default function ProfilePage({
   user,
   onBack,
   onSaved,
-  onOpenChat,
   onOpenSettings,
   onLogout,
 }: Props) {
@@ -105,13 +103,6 @@ export default function ProfilePage({
         <section className="profile-section">
           <h2 className="profile-section-title">Your agent</h2>
           <div className="profile-card profile-links">
-            <button type="button" className="profile-link" onClick={onOpenChat}>
-              <span>
-                <span className="profile-link-title">Chat with Musely Agent</span>
-                <span className="profile-link-sub">Talk to your personal AI agent</span>
-              </span>
-              <span className="profile-link-arrow" aria-hidden>→</span>
-            </button>
             <button type="button" className="profile-link" onClick={onOpenSettings}>
               <span>
                 <span className="profile-link-title">Scheduled tasks</span>
