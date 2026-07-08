@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { resolvePlatformDirForFs } from "./musely-agent-platform-sync.js";
 import { getPlatformEnvMap } from "./musely-agent-platform-env.js";
+import { getMuselyAgentApiEnv } from "./musely-agent-api-env.js";
 
 const SKILLS_PREFIX = "skills/musely";
 
@@ -78,6 +79,32 @@ export function buildPlatformSyncShell({
   return lines.join("\n");
 }
 
+/** Shell script: write Musely API credentials into $DATA/.env (Hermes tools read this file). */
+export function buildMuselyApiEnvShell({ dataPath = "/opt/data", userId } = {}) {
+  if (userId == null) throw new Error("userId is required");
+  const envMap = getMuselyAgentApiEnv(userId);
+  const lines = [
+    "set -eu",
+    `DATA=${shellQuote(dataPath)}`,
+    'mkdir -p "$DATA"',
+    'ENV_FILE="$DATA/.env"',
+    'touch "$ENV_FILE"',
+  ];
+  for (const [key, val] of Object.entries(envMap)) {
+    lines.push(
+      `tmp="$ENV_FILE.tmp"`,
+      `grep -v "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || : > "$tmp"`,
+      `mv "$tmp" "$ENV_FILE"`,
+      `printf '%s=%s\\n' ${shellQuote(key)} ${shellQuote(val)} >> "$ENV_FILE"`
+    );
+  }
+  if (!envMap.AGENT_API_KEY) {
+    lines.push('echo "[musely] WARNING: AGENT_API_KEY is empty on backend" >&2');
+  }
+  lines.push('echo "[musely] Musely API env → $ENV_FILE"');
+  return lines.join("\n");
+}
+
 /** Post-sync checks on the user volume (Fly/Docker). */
 export function buildPlatformSyncVerifyShell({
   dataPath = "/opt/data",
@@ -95,7 +122,7 @@ export function buildPlatformSyncVerifyShell({
       '[ -n "$(ls -A "$DATA/skills/musely" 2>/dev/null)" ] || { echo "verify: $DATA/skills/musely is empty" >&2; exit 1; }'
     );
   }
-  if (set.has("secrets")) {
+  if (set.has("secrets") && Object.keys(getPlatformEnvMap()).length > 0) {
     lines.push('[ -s "$DATA/.env" ] || { echo "verify: missing or empty $DATA/.env" >&2; exit 1; }');
   }
 

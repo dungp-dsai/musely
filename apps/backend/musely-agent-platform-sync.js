@@ -6,7 +6,7 @@ import { listInstances } from "./db.js";
 import {
   orchestratorConfigured,
   syncPlatformToUserVolume,
-  restartUserAgentIfRunning,
+  restartUserAgentAfterSync,
 } from "./musely-agent-orchestrator.js";
 import { getPlatformEnvMap, DEFAULT_PLATFORM_ENV_KEYS } from "./musely-agent-platform-env.js";
 import {
@@ -83,12 +83,10 @@ export async function syncPlatformForUser(userId, { restart = true, sections } =
       "Platform directory not ready — add musely-agent-platform/config.yaml (see config.yaml.example)"
     );
   }
-  await syncPlatformToUserVolume(userId, { sections: normalized });
-  if (restart) {
-    await restartUserAgentIfRunning(userId, { sections: normalized }).catch((err) => {
-      console.warn(`[platform-sync] restart user=${userId}: ${err.message}`);
-    });
-  }
+  // Fly: must run the machine to exec onto the volume; keep it up after sync.
+  // Docker: writes via `docker run alpine` onto the volume — running agent not required.
+  await syncPlatformToUserVolume(userId, { sections: normalized, stopAfterSync: false });
+  await restartUserAgentAfterSync(userId, { restartGateway: restart });
 }
 
 /** Admin: sync selected parts to all provisioned user volumes. */

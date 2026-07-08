@@ -6,9 +6,17 @@ import type {
   TaskThread,
   AiTaskChatMessage,
   UserTopics,
-  FeedItem,
+  UserPreferences,
+  FeedPost,
+  FeedListResponse,
+  FeedUserPrefs,
 } from "./types";
 import type { CronJob } from "./lib/cronTypes";
+import { streamMuselyAgentRequest } from "./lib/muselyAgentRequest";
+import {
+  FEED_REFRESH_FAILED,
+  isAgentFailureResponse,
+} from "./lib/userFacingErrors";
 
 export type User = {
   id: number;
@@ -157,9 +165,115 @@ export const api = {
       body: JSON.stringify(topics),
     }).then(json),
 
-  getFeed: (): Promise<FeedItem[]> => apiFetch("/api/feed").then(json),
+  getUserPreferences: (): Promise<UserPreferences> =>
+    apiFetch("/api/user/preferences").then(json),
 
-  ingestFeed: (): Promise<{ ok: boolean; source: string; items: FeedItem[] }> =>
+  updateUserPreferences: (topics: UserTopics): Promise<UserPreferences> =>
+    apiFetch("/api/user/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(topics),
+    }).then(json),
+
+  getFeedPosts: (params?: { limit?: number; offset?: number }): Promise<FeedListResponse> => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch(`/api/feed/posts${qs ? `?${qs}` : ""}`).then(json);
+  },
+
+  getFeedPost: (id: number): Promise<FeedPost> => apiFetch(`/api/feed/posts/${id}`).then(json),
+
+  setFeedPostReaction: (id: number, reaction: "up" | "down" | null): Promise<FeedPost> =>
+    apiFetch(`/api/feed/posts/${id}/reaction`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reaction }),
+    }).then(json),
+
+  submitFeedPostFeedback: (id: number, content: string): Promise<{ id: number; content: string }> =>
+    apiFetch(`/api/feed/posts/${id}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    }).then(json),
+
+  getFeedPrefs: (): Promise<FeedUserPrefs> => apiFetch("/api/feed/prefs").then(json),
+
+  updateFeedPrefs: (prefs: { skip_feedback_prompt: boolean }): Promise<FeedUserPrefs> =>
+    apiFetch("/api/feed/prefs", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(prefs),
+    }).then(json),
+
+  /** @deprecated Use getFeedPosts */
+  getFeed: (): Promise<FeedPost[]> =>
+    apiFetch("/api/feed").then(json),
+
+  refreshFeed: async (opts?: {
+    signal?: AbortSignal;
+    onWarming?: () => void;
+    onActivity?: (line: string) => void;
+  }): Promise<void> => {
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: "/api/feed/refresh",
+      body: {},
+      signal: opts?.signal,
+      onWarming: opts?.onWarming,
+      onLine: opts?.onActivity,
+    });
+    if (isAgentFailureResponse(text)) {
+      throw new Error(FEED_REFRESH_FAILED);
+    }
+  },
+
+  /**
+   * Hot-pickup: wake the agent (if needed) and ask it to research the writing
+   * queue for the In Progress piece via the do-research skill.
+   */
+  runWritingQueue: async (opts: {
+    postId: number;
+    postTitle: string;
+    taskCount: number;
+    signal?: AbortSignal;
+    onWarming?: () => void;
+  }): Promise<void> => {
+    const n = opts.taskCount;
+    const label = n === 1 ? "1 queued task" : `${n} queued tasks`;
+    const messages = [
+      {
+        role: "user",
+        content: [
+          `The user just hit Start on the AI writing queue.`,
+          ``,
+          `Piece: "${opts.postTitle}" (post_id ${opts.postId}) — already set to In Progress.`,
+          `There ${n === 1 ? "is" : "are"} ${label} waiting.`,
+          ``,
+          `Use the do-research skill to do this correctly (API only):`,
+          `1. GET /api/active and GET /api/active/tasks.`,
+          `2. For each task: claim it, research it, POST findings to /api/feedback/:id/work.`,
+          `3. Do not rewrite the draft or touch the UI.`,
+          `4. Reply with one short confirmation only.`,
+        ].join("\n"),
+      },
+    ];
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: "/api/musely-agent/chat",
+      body: { messages },
+      signal: opts.signal,
+      onWarming: opts.onWarming,
+    });
+    if (isAgentFailureResponse(text)) {
+      throw new Error("Couldn't start your agent on the queue. Please try again.");
+    }
+  },
+
+  /** @deprecated Use refreshFeed */
+  ingestFeed: (): Promise<{ ok: boolean; source: string; posts: FeedPost[] }> =>
     apiFetch("/api/feed/ingest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -257,13 +371,6 @@ export const api = {
     googleAuthEnabled: boolean;
     orchestratorEnabled: boolean;
   }> => apiFetch("/api/config").then(json),
-
-  getMuselyAgentModels: (): Promise<{
-    models: string[];
-    defaultModel?: string | null;
-    gatewayModel?: string;
-    error: string | null;
-  }> => apiFetch("/api/musely-agent/models").then(json),
 
   getCronMeta: (): Promise<{
     enabled: boolean;

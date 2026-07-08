@@ -50,6 +50,7 @@ export const noteActivity = (...args) => requireImpl().noteActivity(...args);
 export const stopInstance = (...args) => requireImpl().stopInstance(...args);
 export const syncPlatformToUserVolume = (...args) => requireImpl().syncPlatformToUserVolume(...args);
 export const restartUserAgentIfRunning = (...args) => requireImpl().restartUserAgentIfRunning(...args);
+export const restartUserAgentAfterSync = (...args) => requireImpl().restartUserAgentAfterSync(...args);
 export const startIdleReaper = (...args) => requireImpl().startIdleReaper(...args);
 
 export const ORCHESTRATOR_SETTINGS = impl?.ORCHESTRATOR_SETTINGS ?? {

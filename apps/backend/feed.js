@@ -33,18 +33,19 @@ function normalizeTopics(topics) {
 }
 
 // Extract a few short keyword-ish phrases from the free-text interests so the
-// fallback (no-LLM) path can still produce topic-labelled starter items.
+// fallback (no-LLM) path can still produce topic-labelled items.
 function keywordsFromInterests(interests) {
   if (!interests) return [];
-  return interests
+  const chunks = interests
     .split(/[\n,;.•\-]+/)
     .map((s) => s.trim())
-    .filter((s) => s.length >= 3 && s.length <= 60)
-    .slice(0, 6);
+    .filter((s) => s.length >= 3 && s.length <= 120);
+  if (chunks.length) return chunks.slice(0, 6);
+  // Single long sentence (common after onboarding) — use as one seed.
+  if (interests.length >= 3) return [interests.slice(0, 120)];
+  return [];
 }
 
-// Deterministic starter items so the "ingest" action is never a dead end,
-// even when no LLM is configured or the request fails.
 function fallbackItems(topics) {
   const { interests, read, write } = normalizeTopics(topics);
   const readSeeds = read.length ? read : keywordsFromInterests(interests);
@@ -53,10 +54,15 @@ function fallbackItems(topics) {
   for (const topic of readSeeds) {
     items.push({
       topic,
-      kind: "read",
       title: `Get up to speed on ${topic}`,
-      summary: `Your agent will gather recent articles, discussions, and key ideas about ${topic} so your feed stays current.`,
-      url: `https://www.google.com/search?q=${encodeURIComponent(`latest ${topic}`)}`,
+      whats_new: `Recent articles, discussions, and key ideas about ${topic} are worth following this week.`,
+      why_it_matters: `This keeps your feed aligned with what you said you want to read about: ${topic}.`,
+      sources: [
+        {
+          label: `Search: latest ${topic}`,
+          url: `https://www.google.com/search?q=${encodeURIComponent(`latest ${topic}`)}`,
+        },
+      ],
     });
   }
 
@@ -64,22 +70,13 @@ function fallbackItems(topics) {
   for (const topic of writeSeeds) {
     items.push({
       topic,
-      kind: "write",
-      title: `Writing prompt: ${topic}`,
-      summary: `Draft a short piece sharing your perspective on ${topic}. Open the Write tab to start with your agent's help.`,
-      url: null,
+      title: `Writing angle: ${topic}`,
+      whats_new: `A timely prompt to draft a short piece sharing your perspective on ${topic}.`,
+      why_it_matters: `You listed ${topic} among topics you want to write about — this is a concrete angle to start from.`,
+      sources: [],
     });
   }
 
-  if (items.length === 0) {
-    items.push({
-      topic: "",
-      kind: "read",
-      title: "Tell us what you're into to personalize your feed",
-      summary: "Describe what you want to read and write about in your preferences so your agent knows what to ingest.",
-      url: null,
-    });
-  }
   return items;
 }
 
@@ -97,14 +94,16 @@ function buildPrompt(topics) {
   lines.push(
     "",
     "Return STRICT JSON only (no markdown) with this shape:",
-    '{ "items": [ { "topic": string, "kind": "read" | "write", "title": string, "summary": string, "url": string | null } ] }',
+    '{ "posts": [ { "topic": string, "title": string, "whats_new": string, "why_it_matters": string, "sources": [ { "label": string, "url": string } ] } ] }',
     "",
     "Rules:",
     "- Honor the user's specificity: if they were detailed, tailor items precisely to what they described.",
-    "- Mix 'read' items (real, well-known resources or current themes worth following; include a plausible url when confident, else null) and 'write' items (concrete, specific writing prompts/angles; url must be null).",
+    "- Each item is a news-style reading card (not a writing prompt).",
+    "- whats_new: 1-2 sentences on what happened or what's new.",
+    "- why_it_matters: 1-2 sentences on why this is relevant to this user.",
+    "- sources: 1-3 real or plausible references with label + url.",
     "- Set a short 'topic' label on each item derived from the user's interests.",
-    "- Keep each summary to 1-2 sentences.",
-    "- Return at most 12 items total."
+    "- Return at most 12 posts total."
   );
   return lines.join("\n");
 }
@@ -138,24 +137,28 @@ async function generateWithLlm(cfg, topics) {
   const content = data?.choices?.[0]?.message?.content || "";
   const jsonText = content.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
   const parsed = JSON.parse(jsonText);
-  const items = Array.isArray(parsed) ? parsed : parsed?.items;
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new Error("Feed LLM returned no items");
+  const raw = Array.isArray(parsed) ? parsed : parsed?.posts ?? parsed?.items;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("Feed LLM returned no posts");
   }
-  return items
+  return raw
     .filter((it) => it && it.title)
     .slice(0, 12)
     .map((it) => ({
       topic: String(it.topic || "").trim(),
-      kind: it.kind === "write" ? "write" : "read",
       title: String(it.title).trim(),
-      summary: String(it.summary || "").trim(),
-      url: it.url ? String(it.url).trim() : null,
+      whats_new: String(it.whats_new || it.whatsNew || it.summary || "").trim(),
+      why_it_matters: String(it.why_it_matters || it.whyItMatters || "").trim(),
+      sources: Array.isArray(it.sources)
+        ? it.sources
+        : it.url
+          ? [{ label: String(it.title).trim(), url: String(it.url).trim() }]
+          : [],
     }));
 }
 
 // Returns { items, source }. `source` is "agent" when the LLM produced the
-// feed, or "starter" for the deterministic fallback.
+// feed, or "starter" for the deterministic fallback. `items` are feed post payloads.
 export async function generateFeedItems(topics) {
   const cfg = resolveLlmConfig();
   if (cfg) {

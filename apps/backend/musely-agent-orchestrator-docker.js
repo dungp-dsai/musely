@@ -18,9 +18,12 @@ import {
 } from "./db.js";
 import {
   buildPlatformSyncShell,
+  buildMuselyApiEnvShell,
   normalizeSyncSections,
   needsPlatformFiles,
+  SYNC_SECTIONS,
 } from "./musely-agent-platform-sync-runner.js";
+import { getMuselyAgentApiEnv } from "./musely-agent-api-env.js";
 import {
   resolvePlatformDirForFs,
   resolvePlatformDirForDocker,
@@ -125,6 +128,23 @@ async function runPlatformSyncOnVolume(volumeName, sections) {
   await docker(args, { timeoutMs: 300_000 });
 }
 
+/** Write CLIENT_URL / AGENT_API_KEY / AGENT_USER_ID into the user volume .env. */
+async function syncMuselyApiEnvToUserVolume(userId) {
+  const volumeName = volumeNameForUser(userId);
+  await ensureVolume(volumeName);
+  const script = buildMuselyApiEnvShell({ dataPath: "/opt/data", userId });
+  await docker(
+    ["run", "--rm", "-v", `${volumeName}:/opt/data`, "alpine", "sh", "-c", script],
+    { timeoutMs: 60_000 }
+  );
+}
+
+async function restartGatewayIfRunning(containerRef) {
+  const state = await getContainerState(containerRef);
+  if (state !== "started") return;
+  await dockerQuiet(["exec", containerRef, "hermes", "gateway", "restart"]);
+}
+
 /** Push selected platform parts into a user's Docker volume. */
 export async function syncPlatformToUserVolume(userId, { sections } = {}) {
   const volumeName = volumeNameForUser(userId);
@@ -142,6 +162,23 @@ export async function restartUserAgentIfRunning(userId, { sections } = {}) {
   const volumeName = volumeNameForUser(userId);
   await runPlatformSyncOnVolume(volumeName, sections);
   await dockerQuiet(["exec", ref, "hermes", "gateway", "restart"]);
+}
+
+/** After admin sync: reload gateway only when the container is already running.
+ *  Volume sync uses a transient alpine container — stopped agents still get updated files. */
+export async function restartUserAgentAfterSync(userId, { restartGateway = true } = {}) {
+  const instance = await getInstance(userId);
+  const ref = instance?.machine_name || instance?.machine_id;
+  if (!ref) throw new Error("No agent container for user — provision first");
+
+  const state = await getContainerState(ref);
+  if (state === "missing") {
+    throw new Error("Agent container missing — provision first");
+  }
+  if (!isMachineRunning(state) || !restartGateway) return;
+
+  await dockerQuiet(["exec", ref, "hermes", "gateway", "restart"]);
+  await touchInstance(userId);
 }
 
 // ---------- Naming ----------
@@ -211,6 +248,7 @@ export function templateConfigured() {
 }
 
 function containerEnvFlags(apiKey, userId) {
+  const muselyApi = getMuselyAgentApiEnv(userId);
   const flags = [
     "-e",
     "API_SERVER_ENABLED=true",
@@ -223,13 +261,14 @@ function containerEnvFlags(apiKey, userId) {
     "-e",
     `HERMES_GATEWAY_NO_SUPERVISE=1`,
     "-e",
-    `AGENT_USER_ID=${userId}`,
+    `AGENT_USER_ID=${muselyApi.AGENT_USER_ID}`,
+    "-e",
+    `CLIENT_URL=${muselyApi.CLIENT_URL}`,
+    "-e",
+    `AGENT_API_KEY=${muselyApi.AGENT_API_KEY}`,
     "-e",
     `API_SERVER_MODEL_NAME=${process.env.MUSELY_AGENT_API_MODEL_NAME || "Musely Agent"}`,
   ];
-  if (process.env.AGENT_API_KEY) {
-    flags.push("-e", `AGENT_API_KEY=${process.env.AGENT_API_KEY}`);
-  }
   for (const key of [
     "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -246,7 +285,7 @@ async function createContainer({ containerName, volumeName, apiKey, userId }) {
   await ensureNetwork();
   await ensureVolume(volumeName);
   try {
-    await syncPlatformToUserVolume(userId);
+    await syncPlatformToUserVolume(userId, { sections: SYNC_SECTIONS });
   } catch (err) {
     console.warn(`[orchestrator:docker] platform sync skipped: ${err.message}`);
   }
@@ -407,6 +446,9 @@ export function ensureInstance(userId) {
     let instance = await provisionInstance(userId);
     logStep("provisioned");
 
+    await syncMuselyApiEnvToUserVolume(userId);
+    logStep("musely api env synced");
+
     let containerName = instance.machine_name;
     let { api_key: apiKey } = instance;
     let state = await getContainerState(containerName);
@@ -434,6 +476,7 @@ export function ensureInstance(userId) {
     logStep(`container started (${containerName})`);
     await waitForHealth(containerName);
     logStep("healthy");
+    await restartGatewayIfRunning(containerName);
     await touchInstance(userId);
 
     return {

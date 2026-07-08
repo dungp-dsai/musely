@@ -20,12 +20,20 @@ import {
   addAiTaskChatMessage,
   serializeUser,
   setUserOnboarding,
+  getUserPreferences,
+  updateUserTopics,
   parseUserTopics,
   getUserById,
-  listFeedItems,
-  countFeedItems,
-  addFeedItems,
-  clearFeedItems,
+  listFeedPosts,
+  getFeedPost,
+  countFeedPosts,
+  addFeedPosts,
+  clearFeedPosts,
+  setFeedPostReaction,
+  addFeedPostFeedback,
+  getFeedUserPrefs,
+  updateFeedUserPrefs,
+  normalizeFeedPostInput,
 } from "./db.js";
 import { generateTaskChatReply } from "./task-chat.js";
 import { generateFeedItems } from "./feed.js";
@@ -40,8 +48,10 @@ import {
 import {
   muselyAgentChatConfigured,
   listMuselyAgentModels,
-  streamMuselyAgentChat,
 } from "./musely-agent-chat.js";
+import { handleMuselyAgentStreamRequest } from "./musely-agent-request.js";
+import { buildFeedRefreshMessages } from "./feed-agent.js";
+import { muselyAgentApiEnvConfigured } from "./musely-agent-api-env.js";
 import {
   muselyAgentCronConfigured,
   listCronJobsFor,
@@ -440,22 +450,6 @@ app.post("/api/auth/logout", (_req, res) => {
 
 // ---------- Musely agent chat (authenticated) ----------
 
-// Resolve the per-user Musely agent target. Returns null + 202 semantics handled by caller.
-async function resolveChatTarget(req, res) {
-  if (!orchestratorConfigured()) return { target: undefined };
-  const state = await quickState(req.user.id);
-  if (!isMachineRunning(state)) {
-    // kick off start in the background (coalesced) and tell the client to retry
-    ensureInstance(req.user.id).catch((err) =>
-      console.error("[orchestrator] background start failed:", err.message)
-    );
-    res.status(202).json({ status: "starting", message: "Starting your Musely agent instance…" });
-    return { warming: true };
-  }
-  const target = await ensureInstance(req.user.id);
-  return { target };
-}
-
 app.get("/api/musely-agent/models", requireUser, async (req, res) => {
   try {
     if (orchestratorConfigured()) {
@@ -474,37 +468,14 @@ app.get("/api/musely-agent/models", requireUser, async (req, res) => {
 });
 
 app.post("/api/musely-agent/chat", requireUser, async (req, res) => {
-  const controller = new AbortController();
-  const abortUpstream = () => {
-    if (!res.writableEnded) controller.abort();
-  };
-  req.on("aborted", abortUpstream);
-  res.on("close", abortUpstream);
-
-  try {
-    const messages = Array.isArray(req.body?.messages) ? req.body.messages : null;
-    if (!messages?.length) {
-      return res.status(400).json({ error: "messages array is required" });
-    }
-
-    const { target, warming } = await resolveChatTarget(req, res);
-    if (warming) return; // 202 already sent
-
-    await streamMuselyAgentChat({
-      messages,
-      model: typeof req.body?.model === "string" ? req.body.model : undefined,
-      res,
-      signal: controller.signal,
-      target,
-    });
-  } catch (err) {
-    if (err.name === "AbortError") return;
-    console.error(err);
-    if (!res.headersSent) res.status(500).json({ error: err.message });
-  } finally {
-    req.off("aborted", abortUpstream);
-    res.off("close", abortUpstream);
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : null;
+  if (!messages?.length) {
+    return res.status(400).json({ error: "messages array is required" });
   }
+  await handleMuselyAgentStreamRequest(req, res, {
+    messages,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+  });
 });
 
 // ---------- Musely agent cron (authenticated, per-user instance) ----------
@@ -743,13 +714,149 @@ app.post("/api/feedback/:id/chat", requireUser, async (req, res) => {
   }
 });
 
-// ---------- Home feed (authenticated) ----------
+// ---------- Home feed ----------
 
-app.get("/api/feed", requireUser, (req, res) =>
-  asJson(res, () => listFeedItems(req.user.id))
+function feedListQuery(req) {
+  const limit = Number(req.query?.limit) || 20;
+  const offset = Number(req.query?.offset) || 0;
+  return { limit, offset };
+}
+
+function parseFeedPostsBody(body) {
+  if (Array.isArray(body?.posts)) return body.posts;
+  if (body && typeof body === "object" && body.title) return [body];
+  return [];
+}
+
+// List feed posts for the signed-in user (also used by the agent for history).
+app.get("/api/feed/posts", requireUserOrAgent, (req, res) =>
+  asJson(res, async () => {
+    const userId = publicUserId(req);
+    const { limit, offset } = feedListQuery(req);
+    const posts = await listFeedPosts(userId, { limit, offset });
+    return {
+      posts,
+      total: await countFeedPosts(userId),
+      limit,
+      offset,
+    };
+  })
 );
 
-// Ask the user's agent to ingest content for their chosen topics.
+app.get("/api/feed/posts/:id", requireUserOrAgent, (req, res) =>
+  asJson(res, async () => {
+    const post = await getFeedPost(publicUserId(req), Number(req.params.id));
+    if (!post) throw new Error("Not found");
+    return post;
+  })
+);
+
+// Agent (or user) writes one or more feed posts after ingestion.
+app.post("/api/feed/posts", requireUserOrAgent, (req, res) => {
+  const posts = parseFeedPostsBody(req.body);
+  if (!posts.length) {
+    return res.status(400).json({ error: "posts array or single post object is required" });
+  }
+  const invalid = posts.find((p) => !normalizeFeedPostInput(p));
+  if (invalid) {
+    return res.status(400).json({ error: "each post requires a non-empty title" });
+  }
+  return asJson(res, async () => {
+    const userId = publicUserId(req);
+    const inserted = await addFeedPosts(userId, posts);
+    return { ok: true, count: inserted.length, posts: inserted };
+  });
+});
+
+app.put("/api/feed/posts/:id/reaction", requireUser, (req, res) => {
+  const reaction = req.body?.reaction;
+  if (reaction !== null && reaction !== "up" && reaction !== "down") {
+    return res.status(400).json({ error: 'reaction must be "up", "down", or null' });
+  }
+  return asJson(res, async () => {
+    const post = await setFeedPostReaction(
+      req.user.id,
+      Number(req.params.id),
+      reaction ?? null
+    );
+    if (!post) throw new Error("Not found");
+    return post;
+  });
+});
+
+app.post("/api/feed/posts/:id/feedback", requireUser, (req, res) => {
+  const content = typeof req.body?.content === "string" ? req.body.content : "";
+  if (!content.trim()) {
+    return res.status(400).json({ error: "content is required" });
+  }
+  return asJson(res, async () => {
+    const row = await addFeedPostFeedback(req.user.id, Number(req.params.id), content);
+    if (!row) throw new Error("Not found");
+    return row;
+  });
+});
+
+app.get("/api/feed/prefs", requireUser, (req, res) =>
+  asJson(res, () => getFeedUserPrefs(req.user.id))
+);
+
+app.put("/api/feed/prefs", requireUser, (req, res) =>
+  asJson(res, () =>
+    updateFeedUserPrefs(req.user.id, {
+      skip_feedback_prompt: Boolean(req.body?.skip_feedback_prompt),
+    })
+  )
+);
+
+// User topic preferences (interests / read / write) — for feed personalization and agent prompts.
+app.get("/api/user/preferences", requireUserOrAgent, (req, res) =>
+  asJson(res, async () => {
+    const prefs = await getUserPreferences(publicUserId(req));
+    if (!prefs) throw new Error("Not found");
+    return prefs;
+  })
+);
+
+app.put("/api/user/preferences", requireUserOrAgent, (req, res) =>
+  asJson(res, async () => {
+    const userId = publicUserId(req);
+    const topics = parseUserTopics({
+      interests: req.body?.interests ?? req.body?.topics?.interests,
+      write: req.body?.write ?? req.body?.topics?.write,
+      read: req.body?.read ?? req.body?.topics?.read,
+    });
+    const row = await updateUserTopics(userId, topics);
+    if (!row) throw new Error("Not found");
+    return getUserPreferences(userId);
+  })
+);
+
+// Legacy alias
+app.get("/api/feed", requireUser, (req, res) =>
+  asJson(res, async () => listFeedPosts(req.user.id, feedListQuery(req)))
+);
+
+// Ask the user's agent to build feed posts via the build-feed skill (SSE stream).
+app.post("/api/feed/refresh", requireUser, async (req, res) => {
+  if (orchestratorConfigured() && !muselyAgentApiEnvConfigured()) {
+    return res
+      .status(503)
+      .json({ error: "We couldn't update your feed right now. Please try again in a moment." });
+  }
+  const prefs = await getUserPreferences(req.user.id);
+  const topics = prefs?.topics;
+  const hasPrefs =
+    String(topics?.interests || "").trim() ||
+    topics?.read?.length ||
+    topics?.write?.length;
+  if (!hasPrefs) {
+    return res.status(400).json({ error: "Please set your interests in Profile first." });
+  }
+  const messages = buildFeedRefreshMessages(prefs);
+  await handleMuselyAgentStreamRequest(req, res, { messages });
+});
+
+// Legacy LLM ingest (deprecated — prefer /api/feed/refresh).
 app.post("/api/feed/ingest", requireUser, (req, res) =>
   asJson(res, async () => {
     const user = await getUserById(req.user.id);
@@ -757,21 +864,21 @@ app.post("/api/feed/ingest", requireUser, (req, res) =>
     const replace = req.body?.replace !== false;
 
     const { items, source } = await generateFeedItems(topics);
-    if (replace) await clearFeedItems(req.user.id);
-    await addFeedItems(req.user.id, items);
+    if (replace) await clearFeedPosts(req.user.id);
+    if (items.length) await addFeedPosts(req.user.id, items);
 
     return {
       ok: true,
       source,
-      items: await listFeedItems(req.user.id),
+      posts: await listFeedPosts(req.user.id, { limit: 100 }),
     };
   })
 );
 
 app.post("/api/feed/clear", requireUser, (req, res) =>
   asJson(res, async () => {
-    await clearFeedItems(req.user.id);
-    return { ok: true, count: await countFeedItems(req.user.id) };
+    await clearFeedPosts(req.user.id);
+    return { ok: true, count: await countFeedPosts(req.user.id) };
   })
 );
 
