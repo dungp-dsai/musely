@@ -287,6 +287,35 @@ async function createMachine({ machineName, volumeId, apiKey, userId }) {
   return machine;
 }
 
+function isFlyExecTimeoutError(err) {
+  const msg = err?.message || "";
+  return (
+    err?.status === 408 ||
+    msg.includes("deadline_exceeded") ||
+    msg.includes("Client.Timeout exceeded while awaiting headers")
+  );
+}
+
+/** Fly marks VM started before guest exec is ready — probe until a trivial cmd works. */
+async function waitForMachineExecReady(machineId, totalTimeoutSec = 90) {
+  const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
+  let lastErr;
+  while (Date.now() < deadline) {
+    try {
+      await execInContainer(machineId, ["sh", "-c", "echo ok"], {
+        timeoutMs: 10_000,
+        retries: 1,
+      });
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isFlyExecTimeoutError(err) && err?.status && err.status !== 409) throw err;
+      await flySleep(1500);
+    }
+  }
+  throw lastErr || new Error(`Machine ${machineId} not ready for exec`);
+}
+
 /** Start machine if needed for volume exec; returns true when this call started it. */
 async function ensureMachineRunningForOps(machineId) {
   let state = await getMachineState(machineId);
@@ -301,6 +330,7 @@ async function ensureMachineRunningForOps(machineId) {
   if (state === "created") await launchMachine(machineId);
   else await startMachine(machineId);
   await waitForMachineState(machineId, "started", 120);
+  await waitForMachineExecReady(machineId, 90);
   return true;
 }
 
@@ -569,31 +599,48 @@ function argvToFlyCmd(argv) {
   return argv.map(shellQuoteSingle).join(" ");
 }
 
+// Fly Machines exec timeout is capped at 60s (API rejects higher values).
+const FLY_EXEC_MAX_TIMEOUT_SEC = 60;
+
 /** Exec a command inside a running machine. Returns stdout string. */
 export async function execInContainer(machineId, argv, opts = {}) {
-  const timeoutSec = opts.timeoutMs ? Math.ceil(opts.timeoutMs / 1000) : 30;
-  const result = await flyRequest(
-    "POST",
-    `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/exec`,
-    { cmd: argvToFlyCmd(argv), timeout: timeoutSec }
+  const timeoutSec = Math.min(
+    FLY_EXEC_MAX_TIMEOUT_SEC,
+    Math.max(1, opts.timeoutMs ? Math.ceil(opts.timeoutMs / 1000) : 30)
   );
-  if (result?.exit_code !== 0) {
-    throw new Error(result?.stderr?.trim() || `exec exited with code ${result?.exit_code}`);
+  const retries = opts.retries ?? 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await flyRequest(
+        "POST",
+        `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}/exec`,
+        { cmd: argvToFlyCmd(argv), timeout: timeoutSec }
+      );
+      if (result?.exit_code !== 0) {
+        throw new Error(result?.stderr?.trim() || `exec exited with code ${result?.exit_code}`);
+      }
+      return result?.stdout || "";
+    } catch (err) {
+      lastErr = err;
+      // Cold start / guest agent wedged briefly — retry only timeouts, not command failures.
+      if (!isFlyExecTimeoutError(err) || attempt === retries) throw err;
+      console.warn(
+        `[orchestrator] exec timeout on ${machineId} (attempt ${attempt}/${retries}): ${err.message}`
+      );
+      await flySleep(1500 * attempt);
+    }
   }
-  return result?.stdout || "";
+  throw lastErr;
 }
 
-/** Run shell on /opt/data via the same entrypoint stack as the gateway (not raw Fly exec). */
+/**
+ * Run a shell script with the machine's mounted /opt/data visible.
+ * Use plain Fly exec — do NOT nest unshare+/init (that boots a second s6 stack and
+ * routinely 408s with "Client.Timeout exceeded while awaiting headers").
+ */
 async function execOnAgentVolume(machineId, shellScript, opts = {}) {
-  return execInContainer(
-    machineId,
-    [
-      "sh",
-      "-c",
-      `exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh sh -c ${shellQuoteSingle(shellScript)}`,
-    ],
-    opts
-  );
+  return execInContainer(machineId, ["sh", "-c", shellScript], opts);
 }
 
 /**
