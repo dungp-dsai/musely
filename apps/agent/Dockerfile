@@ -15,8 +15,7 @@ FROM ${HERMES_BASE}
 ENV API_SERVER_ENABLED=true \
     API_SERVER_HOST=:: \
     API_SERVER_PORT=8642 \
-    GATEWAY_ALLOW_ALL_USERS=true \
-    HERMES_GATEWAY_NO_SUPERVISE=1
+    GATEWAY_ALLOW_ALL_USERS=true
 
 COPY apps/agent/016-musely-foreground-gateway /etc/cont-init.d/016-musely-foreground-gateway
 COPY apps/agent/sync-platform-to-volume.sh /opt/musely/platform/sync-platform-to-volume.sh
@@ -32,8 +31,9 @@ RUN chmod 755 /etc/cont-init.d/016-musely-foreground-gateway \
 # "$@" forwards CMD / Fly init.cmd to main-wrapper (default `hermes` is interactive TUI).
 ENTRYPOINT ["sh", "-c", "if [ \"$$\" -eq 1 ]; then exec /init /opt/hermes/docker/main-wrapper.sh \"$@\"; else exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh \"$@\"; fi", "musely-entrypoint"]
 
-# Headless gateway + OpenAI-compatible API server on :8642 (not interactive `hermes` TUI).
-CMD ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"]
+# Supervised gateway (Hermes s6 default). Do not pass --no-supervise — that makes
+# gateway the main process so `hermes gateway restart` exits the whole machine.
+CMD ["hermes", "gateway", "run", "-q", "--accept-hooks", "--replace"]
 
 EXPOSE 8642
 

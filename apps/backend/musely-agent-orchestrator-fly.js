@@ -44,10 +44,22 @@ const USER_MEMORY_MB = Number(process.env.MUSELY_AGENT_USER_MEMORY_MB) || 2048;
 const USER_CPUS = Number(process.env.MUSELY_AGENT_USER_CPUS) || 1;
 const HEALTH_TIMEOUT_MS = Number(process.env.MUSELY_AGENT_HEALTH_TIMEOUT_MS) || 180_000;
 
-// Headless gateway + API server (default image CMD is interactive `hermes` TUI).
-const GATEWAY_CMD = ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"];
+// Headless gateway + API server. Use Hermes default s6 supervision (do NOT pass
+// --no-supervise): that keeps a sleep-infinity PID 1 so `hermes gateway restart`
+// reloads in-place. With --no-supervise, gateway IS the main process and restart
+// exits the whole Fly machine (412 EOF).
+const GATEWAY_CMD = ["hermes", "gateway", "run", "-q", "--accept-hooks", "--replace"];
 const GATEWAY_CMD_STR = GATEWAY_CMD.join(" ");
 const FLY_SYNC_IMAGE = process.env.FLY_SYNC_IMAGE || "alpine:3.20";
+const LEGACY_NO_SUPERVISE_CMD = [
+  "hermes",
+  "gateway",
+  "run",
+  "--no-supervise",
+  "-q",
+  "--accept-hooks",
+  "--replace",
+];
 
 /** Fly GET often returns init.cmd as one string; Machines spawn needs argv[]. */
 function normalizeInitCmd(cmd) {
@@ -56,6 +68,7 @@ function normalizeInitCmd(cmd) {
     const trimmed = cmd.trim();
     if (!trimmed) return GATEWAY_CMD;
     if (trimmed === GATEWAY_CMD_STR) return GATEWAY_CMD;
+    if (trimmed === LEGACY_NO_SUPERVISE_CMD.join(" ")) return GATEWAY_CMD;
     if (trimmed === "sleep infinity" || trimmed === "sleep inf") return ["sleep", "infinity"];
     return ["sh", "-c", cmd];
   }
@@ -111,7 +124,6 @@ async function repairHermesMachine(machineId) {
       env: {
         ...(machine.config.env || {}),
         API_SERVER_HOST: "::",
-        HERMES_GATEWAY_NO_SUPERVISE: "1",
       },
     }),
     { launch: false }
@@ -249,7 +261,6 @@ function machineConfig({ volumeId, apiKey, userId }) {
     AGENT_USER_ID: muselyApi.AGENT_USER_ID,
     CLIENT_URL: muselyApi.CLIENT_URL,
     AGENT_API_KEY: muselyApi.AGENT_API_KEY,
-    HERMES_GATEWAY_NO_SUPERVISE: "1",
   };
   for (const key of [
     "OPENROUTER_API_KEY",
@@ -296,6 +307,20 @@ function isFlyExecTimeoutError(err) {
   );
 }
 
+/** Guest dropped the exec connection (machine dying/restarting mid-command). */
+function isFlyExecEofError(err) {
+  const msg = err?.message || "";
+  return (
+    err?.status === 412 ||
+    msg.includes("failed_precondition") ||
+    /\bEOF\b/.test(msg)
+  );
+}
+
+function isFlyExecRetryableError(err) {
+  return isFlyExecTimeoutError(err) || isFlyExecEofError(err) || err?.status === 409;
+}
+
 /** Fly marks VM started before guest exec is ready — probe until a trivial cmd works. */
 async function waitForMachineExecReady(machineId, totalTimeoutSec = 90) {
   const deadline = Date.now() + Math.max(1, totalTimeoutSec) * 1000;
@@ -309,7 +334,7 @@ async function waitForMachineExecReady(machineId, totalTimeoutSec = 90) {
       return;
     } catch (err) {
       lastErr = err;
-      if (!isFlyExecTimeoutError(err) && err?.status && err.status !== 409) throw err;
+      if (!isFlyExecRetryableError(err) && err?.status) throw err;
       await flySleep(1500);
     }
   }
@@ -412,6 +437,7 @@ async function syncMuselyApiEnvToUserVolume(userId, { restartGateway = false } =
   try {
     await execOnAgentVolume(machineId, script, { timeoutMs: 60_000 });
     if (restartGateway && isMachineRunning(await getMachineState(machineId))) {
+      await ensureSupervisedGateway(machineId);
       await execInContainer(machineId, ["hermes", "gateway", "restart"]);
     }
   } finally {
@@ -429,16 +455,18 @@ export async function restartUserAgentIfRunning(userId, { sections: _sections } 
   if (!machineId) return;
   const state = await getMachineState(machineId);
   if (!isMachineRunning(state)) return;
+  await ensureSupervisedGateway(machineId);
   await execInContainer(machineId, ["hermes", "gateway", "restart"]);
 }
 
-/** After admin sync: keep machine running and optionally reload gateway config. */
+/** After admin sync: keep machine running and reload gateway config in-place. */
 export async function restartUserAgentAfterSync(userId, { restartGateway = true } = {}) {
   const instance = await getInstance(userId);
   const machineId = instance?.machine_id;
   if (!machineId) throw new Error("No agent machine for user — provision first");
 
   await ensureMachineRunningForOps(machineId);
+  await ensureSupervisedGateway(machineId);
 
   if (restartGateway) {
     await execInContainer(machineId, ["hermes", "gateway", "restart"]);
@@ -486,21 +514,61 @@ async function startMachine(machineId, { retries = 8 } = {}) {
   throw lastErr || new Error(`Failed to start machine ${machineId}`);
 }
 
-/** Patch stopped machines missing foreground-gateway settings. */
+/** Patch machines still on legacy --no-supervise (restart kills those VMs). */
+async function ensureSupervisedGateway(machineId) {
+  const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
+  if (!machine?.config) return;
+
+  const current = normalizeInitCmd(machine.config.init?.cmd);
+  const env = { ...(machine.config.env || {}) };
+  const legacyCmd =
+    JSON.stringify(current) === JSON.stringify(LEGACY_NO_SUPERVISE_CMD) ||
+    (Array.isArray(current) && current.includes("--no-supervise"));
+  const legacyEnv = env.HERMES_GATEWAY_NO_SUPERVISE === "1";
+  if (!legacyCmd && !legacyEnv) return;
+
+  console.log(`[orchestrator] migrating ${machineId} off --no-supervise (restore in-place restart)`);
+  const wasRunning = isMachineRunning(machine.state);
+  if (wasRunning || isTransitionalMachineState(machine.state)) {
+    await stopMachine(machineId);
+    await waitForMachineState(machineId, "stopped", 120);
+  }
+
+  delete env.HERMES_GATEWAY_NO_SUPERVISE;
+  env.API_SERVER_HOST = "::";
+  await updateMachineConfig(
+    machineId,
+    normalizeAgentMachineConfig({
+      ...machine.config,
+      env,
+      init: { ...(machine.config.init || {}), cmd: GATEWAY_CMD },
+    }),
+    { launch: false }
+  );
+
+  if (wasRunning) {
+    await startMachine(machineId);
+    await waitForMachineState(machineId, "started", 120);
+    await waitForMachineExecReady(machineId, 90);
+  }
+}
+
+/** Patch stopped machines missing supervised-gateway settings. */
 async function ensureMachineGatewayCmd(machineId) {
   const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
   if (!machine?.config) return;
   const current = normalizeInitCmd(machine.config.init?.cmd);
   const env = machine.config.env || {};
   const needsCmd = JSON.stringify(current) !== JSON.stringify(GATEWAY_CMD);
-  const needsEnv =
-    env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE !== "1";
+  const needsEnv = env.API_SERVER_HOST !== "::" || env.HERMES_GATEWAY_NO_SUPERVISE === "1";
   if (!needsCmd && !needsEnv) return;
+  const nextEnv = { ...env, API_SERVER_HOST: "::" };
+  delete nextEnv.HERMES_GATEWAY_NO_SUPERVISE;
   await updateMachineConfig(
     machineId,
     normalizeAgentMachineConfig({
       ...machine.config,
-      env: { ...env, API_SERVER_HOST: "::", HERMES_GATEWAY_NO_SUPERVISE: "1" },
+      env: nextEnv,
     }),
     { launch: false }
   );
@@ -623,10 +691,10 @@ export async function execInContainer(machineId, argv, opts = {}) {
       return result?.stdout || "";
     } catch (err) {
       lastErr = err;
-      // Cold start / guest agent wedged briefly — retry only timeouts, not command failures.
-      if (!isFlyExecTimeoutError(err) || attempt === retries) throw err;
+      // Cold start / guest dying mid-exec — retry timeouts and 412 EOF, not command failures.
+      if (!isFlyExecRetryableError(err) || attempt === retries) throw err;
       console.warn(
-        `[orchestrator] exec timeout on ${machineId} (attempt ${attempt}/${retries}): ${err.message}`
+        `[orchestrator] exec retry on ${machineId} (attempt ${attempt}/${retries}): ${err.message}`
       );
       await flySleep(1500 * attempt);
     }

@@ -1,12 +1,10 @@
 #!/command/with-contenv sh
 # shellcheck shell=sh
-# Musely runs the gateway as the container main process (gateway run
-# --no-supervise). Hermes reconcile (02-reconcile-profiles) auto-starts an
-# s6-supervised gateway when gateway_state.json says "running" — which
-# happens after any successful boot. On the next start that races the
-# foreground gateway and the machine exits with code 1.
+# Legacy: when HERMES_GATEWAY_NO_SUPERVISE=1, Hermes reconcile can race a
+# foreground gateway and the machine exits with code 1. Reset state to stopped.
 #
-# Runs after 01-hermes-setup / 015-supervise-perms, before 02-reconcile-profiles.
+# Current Musely uses Hermes default supervised `gateway run` (no --no-supervise),
+# so this script is a no-op unless someone still opts into foreground mode.
 case "${HERMES_GATEWAY_NO_SUPERVISE:-}" in
     1|true|TRUE|True|yes|YES|Yes) ;;
     *) exit 0 ;;
