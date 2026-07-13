@@ -32,7 +32,8 @@ RUN chmod 755 /etc/cont-init.d/016-musely-foreground-gateway \
 # "$@" forwards CMD / Fly init.cmd to main-wrapper (default `hermes` is interactive TUI).
 ENTRYPOINT ["sh", "-c", "if [ \"$$\" -eq 1 ]; then exec /init /opt/hermes/docker/main-wrapper.sh \"$@\"; else exec unshare --fork --pid --mount-proc /init /opt/hermes/docker/main-wrapper.sh \"$@\"; fi", "musely-entrypoint"]
 
-# Headless gateway + OpenAI-compatible API server on :8642 (not interactive `hermes` TUI).
+# Foreground gateway required on Fly (unshare+/init). Hermes default supervised
+# `gateway run` exits the nested main process (~143) within seconds of boot.
 CMD ["hermes", "gateway", "run", "--no-supervise", "-q", "--accept-hooks", "--replace"]
 
 EXPOSE 8642
