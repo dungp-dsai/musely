@@ -1,0 +1,24 @@
+---
+description: Hard constraints for Fly per-user agent machines (gateway, exec, admin sync). Prevents 408/412 regressions.
+globs: apps/backend/musely-agent-orchestrator*.js,apps/agent/**/*,docs/fly-agent-gateway-sync.md,docs/agent-instance-provisioning.md
+alwaysApply: false
+---
+
+# Fly agent gateway & sync — do not regress
+
+Full write-up: [docs/fly-agent-gateway-sync.md](../../docs/fly-agent-gateway-sync.md)
+
+## Never do these on Fly
+
+1. **Do not remove `--no-supervise`** / `HERMES_GATEWAY_NO_SUPERVISE=1`. Supervised `gateway run` exits ~143 within seconds under our unshare+/init entrypoint.
+2. **Do not call `hermes gateway restart`**. Gateway is the main process → kills the VM → `412 EOF` / `machine not running` after a successful sync.
+3. **Do not wrap volume writes in nested `unshare`+/`init`/main-wrapper**. Use plain `sh -c` via Fly exec. Nested init → `408 awaiting headers`.
+4. **Do not recreate machines on non-404 errors**. Only recreate when Fly returns **404** (or state `destroyed`).
+
+## Sync effect without restart
+
+Admin sync writes `/opt/data` immediately. **config.yaml** and **.env** usually do **not** apply to a running gateway until the next cold start. Skills are more flexible but disk is updated either way. Prefer stop-after-sync (optional) over in-place restart — never in-place restart.
+
+## Duplicate-gateway race
+
+Foreground gateway + reconciler starting a supervised gateway when `gateway_state.json` is `running` → exit code 1. Keep `016-musely-foreground-gateway` resetting state to `stopped` when `NO_SUPERVISE=1`.

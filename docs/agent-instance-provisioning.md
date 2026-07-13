@@ -37,8 +37,9 @@ On every `ensureInstance`, the same three Musely API vars are written to the age
 **Config files** / **Skills** / **Sync env vars** buttons → `POST /api/admin/musely-agent/sync-platform` with one section.
 
 - Loops all rows in `musely_agent_instances`
-- Pushes selected section(s) to each user's volume
+- Pushes selected section(s) to each user's volume via Fly/Docker exec
 - Does **not** create machines — user must be provisioned first
+- **Fly:** do **not** in-place `hermes gateway restart` after sync (kills the VM). Files land on `/opt/data`; config/secrets fully apply on the next cold start. See [fly-agent-gateway-sync.md](fly-agent-gateway-sync.md).
 
 New user **after** an admin sync still gets full platform on **first provision** (seed step above). Re-sync from admin only needed when you **change** platform files or secrets later.
 
@@ -47,11 +48,16 @@ New user **after** an admin sync still gets full platform on **first provision**
 | | Docker | Fly |
 |---|--------|-----|
 | Seed on first provision | ✓ (in `createContainer`) | ✓ (after `createMachine` + DB row) |
-| Mechanism | Alpine container on volume | Start machine → exec → copy to volume |
+| Mechanism | Alpine container on volume | Start machine → plain exec → copy to volume |
 | Machine destroyed on sync | No | No |
+| In-place gateway restart after sync | OK (`docker exec … gateway restart`) | **Forbidden** (exits VM) |
 
 ## Credentials note
 
 - `platform_secrets` in SQLite are **plain text** — not encrypted.
 - Per-user `api_key` in `musely_agent_instances` is also plain text.
 - See [agent-api-keys.md](agent-api-keys.md) for `AGENT_API_KEY` vs `API_SERVER_KEY`.
+
+## Fly hard constraints
+
+Gateway mode, exec, stale machine IDs, and sync/restart behavior: **[fly-agent-gateway-sync.md](fly-agent-gateway-sync.md)**.

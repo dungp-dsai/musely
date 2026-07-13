@@ -1,5 +1,11 @@
 // Per-user Musely agent orchestration via the Fly Machines API.
 //
+// HARD CONSTRAINTS (do not regress): docs/fly-agent-gateway-sync.md
+//   - Always --no-supervise + HERMES_GATEWAY_NO_SUPERVISE=1 on Fly
+//   - Never hermes gateway restart (kills VM)
+//   - Plain sh exec for /opt/data writes (no nested unshare+/init)
+//   - Recreate machines only on Fly 404 / destroyed
+//
 // Each user gets a dedicated Fly Machine + persistent volume inside
 // FLY_AGENT_APP. Machines are started on demand and stopped when idle.
 // The backend reaches running machines through Fly's internal 6PN network:
