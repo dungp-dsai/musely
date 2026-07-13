@@ -134,6 +134,17 @@ export function templateConfigured() {
 
 // ---------- Fly Machines API helpers ----------
 
+function flyApiError(method, path, status, detail) {
+  const err = new Error(`Fly API ${method} ${path}: ${status} ${detail}`);
+  err.status = status;
+  return err;
+}
+
+/** True only when Fly confirms this machine id does not exist (not auth/network/5xx). */
+function isFlyMachineNotFoundError(err) {
+  return err?.status === 404;
+}
+
 async function flyRequest(method, path, body) {
   const url = `${FLY_API_BASE}${path}`;
   const opts = {
@@ -149,13 +160,13 @@ async function flyRequest(method, path, body) {
   if (res.status === 204) return null;
   const contentType = res.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
-    if (!res.ok) throw new Error(`Fly API ${method} ${path}: HTTP ${res.status}`);
+    if (!res.ok) throw flyApiError(method, path, res.status, `HTTP ${res.status}`);
     return null;
   }
   const data = await res.json();
   if (!res.ok) {
     const msg = data?.error || data?.message || JSON.stringify(data);
-    throw new Error(`Fly API ${method} ${path}: ${res.status} ${msg}`);
+    throw flyApiError(method, path, res.status, msg);
   }
   return data;
 }
@@ -195,8 +206,11 @@ async function getMachineState(machineId) {
   try {
     const machine = await flyRequest("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`);
     return machine?.state || "unknown";
-  } catch {
-    return "missing";
+  } catch (err) {
+    // Only treat genuine "machine id gone" as missing. Auth/network/5xx must not
+    // look like a deleted machine or ensure() will create orphan replacements.
+    if (isFlyMachineNotFoundError(err)) return "missing";
+    throw err;
   }
 }
 
@@ -278,6 +292,9 @@ async function ensureMachineRunningForOps(machineId) {
   let state = await getMachineState(machineId);
   if (isTransitionalMachineState(state)) {
     state = await waitForMachineStable(machineId, 120);
+  }
+  if (state === "missing" || state === "destroyed") {
+    throw flyApiError("GET", `/v1/apps/${FLY_AGENT_APP}/machines/${machineId}`, 404, "machine not found");
   }
   if (isMachineRunning(state)) return false;
   await ensureMachineGatewayCmd(machineId);
@@ -632,7 +649,7 @@ async function waitForHealth(machineId, signal) {
     if (signal?.aborted) throw new Error("aborted");
 
     const state = await getMachineState(machineId);
-    if (state === "stopped" || state === "destroyed") {
+    if (state === "stopped" || state === "destroyed" || state === "missing") {
       throw new Error(
         `Musely agent machine exited before becoming healthy (state=${state}). ` +
           `Check: flyctl logs -a ${FLY_AGENT_APP} --machine ${machineId}`
@@ -708,16 +725,33 @@ export function ensureInstance(userId) {
     let instance = await provisionInstance(userId);
     logStep("provisioned");
 
-    await syncMuselyApiEnvToUserVolume(userId);
-    logStep("musely api env synced");
-
     let { machine_id: machineId, machine_name: machineName, api_key: apiKey } = instance;
 
+    // Resolve Fly state before any ops that require the machine to exist.
+    // Otherwise sync/repair hit 404 on a stale DB machine_id and never recreate.
     let state = await getMachineState(machineId);
     if (isTransitionalMachineState(state)) {
       logStep(`waiting for machine (was ${state})`);
       state = await waitForMachineStable(machineId, 180);
     }
+
+    if (state === "destroyed" || state === "missing") {
+      // Machine deleted on Fly (or never existed) while DB still has the old id.
+      // Recreate only for missing/destroyed — not for auth/network/API failures.
+      logStep(`machine ${machineId} ${state} — recreating`);
+      const user = await getUserById(userId);
+      const newName = machineNameForUser(userId, user?.name);
+      const volumeId = (await findExistingVolume(userId)) || (await createVolume(userId));
+      const newMachine = await createMachine({ machineName: newName, volumeId, apiKey, userId });
+      await updateInstanceMachineId(userId, newMachine.id, newName);
+      machineId = newMachine.id;
+      machineName = newName;
+      await setInstanceStatus(userId, "starting");
+      state = await getMachineState(machineId);
+    }
+
+    await syncMuselyApiEnvToUserVolume(userId);
+    logStep("musely api env synced");
 
     await repairHermesMachine(machineId);
     state = await getMachineState(machineId);
@@ -735,17 +769,7 @@ export function ensureInstance(userId) {
       };
     }
 
-    if (state === "destroyed" || state === "missing") {
-      // Machine was deleted externally; recreate it (volume persists). Boots on create.
-      const user = await getUserById(userId);
-      const newName = machineNameForUser(userId, user?.name);
-      const volumeId = (await findExistingVolume(userId)) || (await createVolume(userId));
-      const newMachine = await createMachine({ machineName: newName, volumeId, apiKey, userId });
-      await updateInstanceMachineId(userId, newMachine.id, newName);
-      machineId = newMachine.id;
-      machineName = newName;
-      await setInstanceStatus(userId, "starting");
-    } else if (state === "created") {
+    if (state === "created") {
       // skip_launch leftovers or mid-provision — /start rejects "created"; launch via update.
       await setInstanceStatus(userId, "starting");
       await ensureMachineGatewayCmd(machineId);
