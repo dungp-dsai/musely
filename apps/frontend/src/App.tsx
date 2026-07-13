@@ -3,6 +3,9 @@ import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
 import FeedView from "./components/FeedView";
 import UserMenu from "./components/UserMenu";
+import NotificationCenter, {
+  NotificationToastHost,
+} from "./components/NotificationCenter";
 import CronSettings from "./pages/CronSettings";
 import WaitlistPage from "./pages/WaitlistPage";
 import OnboardingPage from "./pages/OnboardingPage";
@@ -11,6 +14,7 @@ import AdminPage from "./pages/AdminPage";
 import MuselyAgentBootScreen from "./components/MuselyAgentBootScreen";
 import { useAuth } from "./auth/AuthContext";
 import { useMuselyAgentBoot } from "./hooks/useMuselyAgentBoot";
+import { useNotifications } from "./notifications/NotificationContext";
 import { api } from "./api";
 import type { Post, PostSummary } from "./types";
 
@@ -29,6 +33,7 @@ export default function App() {
     retry: retryAgent,
     attempt: agentBootAttempt,
   } = useMuselyAgentBoot(user, onboarded);
+  const { focusedFeedJob, backgroundFeedJob } = useNotifications();
   const [view, setView] = useState<View>("feed");
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -37,6 +42,16 @@ export default function App() {
   const [landingNotice, setLandingNotice] = useState<string | null>(null);
   const [adminRoute] = useState(isAdminRoute);
   const [cronSeed, setCronSeed] = useState<{ name?: string; prompt?: string } | null>(null);
+
+  const goToView = useCallback(
+    (next: View) => {
+      if (next !== "feed" && focusedFeedJob?.status === "running") {
+        backgroundFeedJob(focusedFeedJob.id);
+      }
+      setView(next);
+    },
+    [focusedFeedJob, backgroundFeedJob]
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -171,36 +186,42 @@ export default function App() {
   // Full-screen sub-views reachable from the header/sidebar.
   if (view === "settings") {
     return (
-      <div className="app app-chat">
-        <main className="main main-chat">
-          <CronSettings
-            seed={cronSeed}
-            onBack={() => {
-              setCronSeed(null);
-              setView("write");
-            }}
-          />
-        </main>
-      </div>
+      <>
+        <div className="app app-chat">
+          <main className="main main-chat">
+            <CronSettings
+              seed={cronSeed}
+              onBack={() => {
+                setCronSeed(null);
+                goToView("write");
+              }}
+            />
+          </main>
+        </div>
+        <NotificationToastHost onOpenFeed={() => goToView("feed")} />
+      </>
     );
   }
 
   if (view === "profile") {
     return (
-      <div className="app app-chat">
-        <main className="main main-chat">
-          <ProfilePage
-            user={user}
-            onBack={() => setView("feed")}
-            onSaved={refresh}
-            onOpenSettings={() => {
-              setCronSeed(null);
-              setView("settings");
-            }}
-            onLogout={logout}
-          />
-        </main>
-      </div>
+      <>
+        <div className="app app-chat">
+          <main className="main main-chat">
+            <ProfilePage
+              user={user}
+              onBack={() => goToView("feed")}
+              onSaved={refresh}
+              onOpenSettings={() => {
+                setCronSeed(null);
+                goToView("settings");
+              }}
+              onLogout={logout}
+            />
+          </main>
+        </div>
+        <NotificationToastHost onOpenFeed={() => goToView("feed")} />
+      </>
     );
   }
 
@@ -218,7 +239,7 @@ export default function App() {
             role="tab"
             aria-selected={view === "feed"}
             className={`home-tab ${view === "feed" ? "active" : ""}`}
-            onClick={() => setView("feed")}
+            onClick={() => goToView("feed")}
           >
             Feed
           </button>
@@ -227,19 +248,20 @@ export default function App() {
             role="tab"
             aria-selected={view === "write"}
             className={`home-tab ${view === "write" ? "active" : ""}`}
-            onClick={() => setView("write")}
+            onClick={() => goToView("write")}
           >
             Write
           </button>
         </nav>
 
         <div className="home-user">
+          <NotificationCenter onOpenFeed={() => goToView("feed")} />
           <UserMenu
             user={user}
-            onOpenProfile={() => setView("profile")}
+            onOpenProfile={() => goToView("profile")}
             onOpenSettings={() => {
               setCronSeed(null);
-              setView("settings");
+              goToView("settings");
             }}
             onLogout={logout}
           />
@@ -255,7 +277,7 @@ export default function App() {
               posts={posts}
               selectedId={selectedId}
               onSelect={(id) => {
-                setView("write");
+                goToView("write");
                 setSelectedId(id);
               }}
               onCreate={create}
@@ -273,7 +295,7 @@ export default function App() {
                   onDeleted={handleDeleted}
                   onOpenSchedule={(seed) => {
                     setCronSeed(seed ?? null);
-                    setView("settings");
+                    goToView("settings");
                   }}
                 />
               ) : (
@@ -290,6 +312,7 @@ export default function App() {
           </div>
         )}
       </div>
+      <NotificationToastHost onOpenFeed={() => goToView("feed")} />
     </div>
   );
 }

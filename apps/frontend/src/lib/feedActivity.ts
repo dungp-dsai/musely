@@ -93,6 +93,10 @@ export function looksLikeActivity(line: string): boolean {
  * Derive the timeline from the breadcrumbs seen so far plus elapsed time.
  * Real events drive progress; a gentle time-based floor keeps it alive when the
  * agent is quiet, but never fakes the final "save" step.
+ *
+ * Detail prefers the latest breadcrumb that belongs to the active phase (or
+ * later), so an early "Waking your agent" line doesn't stick under Research
+ * after the timer has advanced.
  */
 export function computeFeedTimeline(
   activity: string[],
@@ -101,12 +105,16 @@ export function computeFeedTimeline(
 ): FeedTimeline {
   let reached = 0;
   let detail = "";
+  let detailPhase: FeedPhaseId | null = null;
 
   for (const raw of activity) {
     const id = classifyActivity(raw);
     if (id) reached = Math.max(reached, PHASE_INDEX[id]);
     const clean = cleanActivityText(raw);
-    if (clean) detail = clean;
+    if (clean) {
+      detail = clean;
+      detailPhase = id;
+    }
   }
 
   // Time floor advances only up to "curate" (index 3) so we never fake saving.
@@ -115,6 +123,15 @@ export function computeFeedTimeline(
   reached = Math.max(reached, Math.min(timeFloor, 3));
 
   const activeIndex = done ? FEED_PHASES.length : Math.min(reached, FEED_PHASES.length - 1);
+
+  // Drop stale detail from an earlier phase once we've moved on.
+  if (
+    detail &&
+    detailPhase != null &&
+    PHASE_INDEX[detailPhase] < activeIndex
+  ) {
+    detail = "";
+  }
 
   const steps: FeedTimelineStep[] = FEED_PHASES.map((phase, i) => ({
     ...phase,

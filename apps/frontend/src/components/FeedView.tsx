@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, type User } from "../api";
 import { FEED_REFRESH_FAILED, toUserFacingError } from "../lib/userFacingErrors";
+import { useNotifications } from "../notifications/NotificationContext";
 import type { FeedPost } from "../types";
 import FeedCard from "./FeedCard";
 import FeedBuildingScreen from "./FeedBuildingScreen";
@@ -11,51 +12,23 @@ interface Props {
 
 export default function FeedView({ user }: Props) {
   const [items, setItems] = useState<FeedPost[] | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [activity, setActivity] = useState<string[]>([]);
-  const [runKey, setRunKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const refreshInFlight = useRef(false);
-  const abortRef = useRef<AbortController | null>(null);
+  const {
+    focusedFeedJob,
+    runningFeedJob,
+    feedRevision,
+    startFeedRefresh,
+    cancelFeedJob,
+    retryFeedJob,
+    backgroundFeedJob,
+    focusFeedJob,
+  } = useNotifications();
 
   const load = useCallback(async () => {
     const res = await api.getFeedPosts({ limit: 50 });
     setItems(res.posts);
     return res.posts;
   }, []);
-
-  const refresh = useCallback(async () => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setRefreshing(true);
-    setError(null);
-    setActivity([]);
-
-    try {
-      await api.refreshFeed({
-        signal: controller.signal,
-        onWarming: () =>
-          setActivity((prev) => (prev.length ? prev : ["Waking your agent"])),
-        onActivity: (line) => setActivity((prev) => [...prev, line]),
-      });
-      const posts = await load();
-      if (posts.length === 0) {
-        setError(FEED_REFRESH_FAILED);
-      }
-    } catch (e) {
-      const err = e as Error;
-      if (err.name !== "AbortError" && !/aborted/i.test(err.message)) {
-        setError(toUserFacingError(err.message, FEED_REFRESH_FAILED));
-      }
-    } finally {
-      refreshInFlight.current = false;
-      setRefreshing(false);
-    }
-  }, [load]);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,17 +47,12 @@ export default function FeedView({ user }: Props) {
     };
   }, [load]);
 
-  const retryRefresh = () => {
-    setRunKey((k) => k + 1);
-    void refresh();
-  };
-
-  const cancelRefresh = () => {
-    abortRef.current?.abort();
-    refreshInFlight.current = false;
-    setRefreshing(false);
-    setActivity([]);
-  };
+  useEffect(() => {
+    if (feedRevision === 0) return;
+    void load().catch(() => {
+      /* keep current list */
+    });
+  }, [feedRevision, load]);
 
   const firstName = user.name?.split(/\s+/)[0]?.trim();
   const interests = (user.topics?.interests ?? "").trim();
@@ -101,17 +69,48 @@ export default function FeedView({ user }: Props) {
       ? readTopics.join(", ")
       : "your interests";
 
+  const startRefresh = () => {
+    setError(null);
+    startFeedRefresh({ topicLabel });
+  };
+
   const displayError = error ? toUserFacingError(error, FEED_REFRESH_FAILED) : null;
 
-  if (refreshing) {
+  const backgroundBanner =
+    runningFeedJob && !focusedFeedJob ? (
+      <div className="feed-bg-banner" role="status">
+        <div className="feed-bg-banner-copy">
+          <span className="feed-bg-banner-pulse" aria-hidden />
+          <div>
+            <strong>Building your feed in the background</strong>
+            <p>{runningFeedJob.body}</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost sm"
+          onClick={() => focusFeedJob(runningFeedJob.id)}
+        >
+          View progress
+        </button>
+      </div>
+    ) : null;
+
+  if (focusedFeedJob) {
     return (
       <FeedBuildingScreen
-        activity={activity}
-        error={displayError}
-        onRetry={retryRefresh}
-        onCancel={cancelRefresh}
-        topicLabel={topicLabel}
-        runKey={runKey}
+        activity={focusedFeedJob.activity}
+        error={focusedFeedJob.error ?? null}
+        onRetry={() => retryFeedJob(focusedFeedJob.id)}
+        onCancel={() => cancelFeedJob(focusedFeedJob.id)}
+        onBackground={
+          focusedFeedJob.status === "running"
+            ? () => backgroundFeedJob(focusedFeedJob.id)
+            : undefined
+        }
+        topicLabel={focusedFeedJob.topicLabel ?? topicLabel}
+        runKey={focusedFeedJob.runKey}
+        startedAt={focusedFeedJob.startedAt}
       />
     );
   }
@@ -132,6 +131,7 @@ export default function FeedView({ user }: Props) {
             {displayError}
           </div>
         )}
+        {backgroundBanner}
         <div className="feed-empty">
           <div className="feed-empty-inner">
             <div className="feed-empty-mark" aria-hidden>
@@ -172,17 +172,19 @@ export default function FeedView({ user }: Props) {
             <button
               type="button"
               className="feed-empty-cta"
-              onClick={() => void refresh()}
+              onClick={startRefresh}
+              disabled={Boolean(runningFeedJob)}
             >
               <span className="feed-empty-cta-spark" aria-hidden>
                 ✦
               </span>
-              Find stories for me
+              {runningFeedJob ? "Building…" : "Find stories for me"}
             </button>
 
             <p className="feed-empty-hint">
               I&apos;ll research fresh, relevant posts tuned to your interests
-              — this usually takes about a minute.
+              — this usually takes about a minute. You can keep browsing while
+              it runs.
             </p>
           </div>
         </div>
@@ -197,6 +199,7 @@ export default function FeedView({ user }: Props) {
           {displayError}
         </div>
       )}
+      {backgroundBanner}
 
       <div className="feed-list">
         <div className="feed-toolbar">
@@ -205,8 +208,13 @@ export default function FeedView({ user }: Props) {
             <p className="feed-subheading">Personalized for {topicLabel}</p>
           </div>
           <div className="feed-actions">
-            <button type="button" className="btn" onClick={() => void refresh()}>
-              Refresh
+            <button
+              type="button"
+              className="btn"
+              onClick={startRefresh}
+              disabled={Boolean(runningFeedJob)}
+            >
+              {runningFeedJob ? "Building…" : "Refresh"}
             </button>
           </div>
         </div>

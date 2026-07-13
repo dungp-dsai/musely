@@ -11,9 +11,13 @@ type Props = {
   error?: string | null;
   onRetry?: () => void;
   onCancel?: () => void;
+  /** Hide the full-screen progress UI; job keeps running in the notification center. */
+  onBackground?: () => void;
   topicLabel?: string;
   /** Bumping this remounts the timer/animation (used on retry). */
   runKey?: number;
+  /** Absolute start time for this run — keeps elapsed correct across remounts. */
+  startedAt?: number;
 };
 
 function PhaseIcon({ id }: { id: FeedPhaseId }) {
@@ -87,21 +91,32 @@ export default function FeedBuildingScreen({
   error,
   onRetry,
   onCancel,
+  onBackground,
   topicLabel,
   runKey = 0,
+  startedAt,
 }: Props) {
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const startedAtRef = useRef(startedAt ?? Date.now());
+
+  useEffect(() => {
+    // Only reset the clock when a new run starts (retry), not when remounting
+    // the same background job.
+    if (startedAt != null) {
+      startedAtRef.current = startedAt;
+    } else {
+      startedAtRef.current = Date.now();
+    }
+    setNow(Date.now());
+  }, [runKey, startedAt]);
 
   useEffect(() => {
     if (error) return;
-    startRef.current = Date.now();
-    setElapsed(0);
-    const id = window.setInterval(() => {
-      setElapsed(Date.now() - startRef.current);
-    }, 250);
+    const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
   }, [error, runKey]);
+
+  const elapsed = Math.max(0, now - startedAtRef.current);
 
   const timeline = useMemo(
     () => computeFeedTimeline(activity, elapsed, false),
@@ -181,11 +196,22 @@ export default function FeedBuildingScreen({
               {seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`} ·
               usually about a minute
             </span>
-            {onCancel && (
-              <button type="button" className="feed-build-cancel" onClick={onCancel}>
-                Cancel
-              </button>
-            )}
+            <div className="feed-build-foot-actions">
+              {onBackground && (
+                <button
+                  type="button"
+                  className="feed-build-background"
+                  onClick={onBackground}
+                >
+                  Continue in background
+                </button>
+              )}
+              {onCancel && (
+                <button type="button" className="feed-build-cancel" onClick={onCancel}>
+                  Cancel
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
