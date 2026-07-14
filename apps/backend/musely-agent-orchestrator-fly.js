@@ -373,6 +373,70 @@ async function ensureMachineRunningForOps(machineId) {
   return true;
 }
 
+/**
+ * Upload a gzip tar onto the agent via base64 `printf` chunks over Fly exec, then extract
+ * under `/tmp/musely-platform`.
+ *
+ * Retry-safe: on any failure we wipe and rewrite from scratch. Never retry a single `>>`
+ * append alone — a lost response after a successful write would duplicate bytes and yield
+ * "gzip: stdin: not in gzip format" on extract.
+ */
+async function uploadPlatformTarToMachine(machineId, tarBuffer) {
+  const chunks = chunkBase64(tarBuffer);
+  const expectedB64Len = chunks.reduce((n, c) => n + c.length, 0);
+  let lastErr;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await execInContainer(
+        machineId,
+        [
+          "sh",
+          "-c",
+          "rm -rf /tmp/musely-platform /tmp/platform.tgz /tmp/platform.tgz.b64 && mkdir -p /tmp/musely-platform",
+        ],
+        { retries: 2 }
+      );
+
+      // Appends must not use Fly exec auto-retry — a successful write + lost ACK would
+      // duplicate the chunk. Outer loop restarts the whole upload instead.
+      for (const chunk of chunks) {
+        const escaped = chunk.replace(/'/g, `'\\''`);
+        await execInContainer(
+          machineId,
+          ["sh", "-c", `printf '%s' '${escaped}' >> /tmp/platform.tgz.b64`],
+          { retries: 1, timeoutMs: 60_000 }
+        );
+      }
+
+      await execInContainer(
+        machineId,
+        [
+          "sh",
+          "-c",
+          // BusyBox/GNU: prefer -d; length check catches truncated multi-chunk uploads.
+          `test -s /tmp/platform.tgz.b64 && ` +
+            `test "$(wc -c < /tmp/platform.tgz.b64 | tr -d ' ')" -eq ${expectedB64Len} && ` +
+            `(base64 -d /tmp/platform.tgz.b64 2>/dev/null || base64 -D /tmp/platform.tgz.b64) > /tmp/platform.tgz && ` +
+            `test -s /tmp/platform.tgz && gzip -t /tmp/platform.tgz && ` +
+            `tar -xzf /tmp/platform.tgz -C /tmp/musely-platform`,
+        ],
+        { timeoutMs: 120_000, retries: 1 }
+      );
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.warn(
+        `[orchestrator] platform tar upload retry on ${machineId} (attempt ${attempt}/3): ${err.message}`
+      );
+      if (attempt === 3) break;
+      await flySleep(1000 * attempt);
+    }
+  }
+
+  throw lastErr || new Error(`Failed to upload platform tar to ${machineId}`);
+}
+
 /** Sync selected platform parts from backend storage into user volume.
  *  Never replaces or destroys the user machine — only stop/start + exec on the same machine ID. */
 export async function syncPlatformToUserVolume(userId, { sections, stopAfterSync = true } = {}) {
@@ -397,35 +461,7 @@ export async function syncPlatformToUserVolume(userId, { sections, stopAfterSync
     if (needsPlatformFiles(normalized)) {
       const platformDir = platformDirOrThrow();
       const tarBuffer = await createPlatformTarBuffer(platformDir, normalized);
-      const chunks = chunkBase64(tarBuffer);
-
-      await execInContainer(machineId, [
-        "sh",
-        "-c",
-        "rm -rf /tmp/musely-platform /tmp/platform.tgz /tmp/platform.tgz.b64 && mkdir -p /tmp/musely-platform",
-      ]);
-
-      for (const chunk of chunks) {
-        const escaped = chunk.replace(/'/g, `'\\''`);
-        await execInContainer(machineId, [
-          "sh",
-          "-c",
-          `printf '%s' '${escaped}' >> /tmp/platform.tgz.b64`,
-        ]);
-      }
-
-      await execInContainer(
-        machineId,
-        [
-          "sh",
-          "-c",
-          "test -s /tmp/platform.tgz.b64 && " +
-            "(base64 -d /tmp/platform.tgz.b64 2>/dev/null || base64 -D /tmp/platform.tgz.b64) > /tmp/platform.tgz && " +
-            "test -s /tmp/platform.tgz && " +
-            "tar -xzf /tmp/platform.tgz -C /tmp/musely-platform",
-        ],
-        { timeoutMs: 120_000 }
-      );
+      await uploadPlatformTarToMachine(machineId, tarBuffer);
     }
 
     const out = await execOnAgentVolume(machineId, syncScript, { timeoutMs: 120_000 });

@@ -167,23 +167,39 @@ export function createPlatformTarBuffer(platformDir, sections = SYNC_SECTIONS) {
   }
 
   return new Promise((resolve, reject) => {
-    const chunks = [];
+    const stdoutChunks = [];
+    const stderrChunks = [];
     const child = spawn("tar", ["-czf", "-", "-C", platformDir, ...paths], {
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout.on("data", (d) => chunks.push(d));
-    child.stderr.on("data", (d) => chunks.push(d));
+    child.stdout.on("data", (d) => stdoutChunks.push(d));
+    child.stderr.on("data", (d) => stderrChunks.push(d));
     child.on("error", reject);
     child.on("close", (code) => {
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
       if (code !== 0) {
-        return reject(new Error(Buffer.concat(chunks).toString("utf8") || `tar exit ${code}`));
+        return reject(new Error(stderr || `tar exit ${code}`));
       }
-      resolve(Buffer.concat(chunks));
+      const buf = Buffer.concat(stdoutChunks);
+      // Guard against accidental mixing / empty spawn output
+      if (buf.length < 2 || buf[0] !== 0x1f || buf[1] !== 0x8b) {
+        return reject(
+          new Error(
+            `tar produced non-gzip output (${buf.length} bytes)${stderr ? `: ${stderr}` : ""}`
+          )
+        );
+      }
+      resolve(buf);
     });
   });
 }
 
-export function chunkBase64(buffer, size = 32_000) {
+/**
+ * Split base64 for Fly Machines exec `printf` uploads.
+ * Keep chunks small: large single-quoted cmds can truncate / flake under guest exec,
+ * and append+retry must stay short so a full restart rewrites cleanly.
+ */
+export function chunkBase64(buffer, size = 8_000) {
   const b64 = buffer.toString("base64");
   const out = [];
   for (let i = 0; i < b64.length; i += size) out.push(b64.slice(i, i + size));
