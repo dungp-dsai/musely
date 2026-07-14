@@ -4483,6 +4483,18 @@ a.wl-signin {
   flex: 1;
 }
 
+.admin-editor-new-path {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+}
+
+.admin-editor-new-path .admin-input {
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
 .admin-editor-actions {
   display: flex;
   gap: 8px;

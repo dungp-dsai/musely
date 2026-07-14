@@ -30,6 +30,8 @@ export default function AdminPage() {
   const [platformRoot, setPlatformRoot] = useState("");
   const [platformFiles, setPlatformFiles] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState("config.yaml");
+  const [creatingFile, setCreatingFile] = useState(false);
+  const [newFilePath, setNewFilePath] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
 
@@ -56,7 +58,9 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
 
-  const configDirty = editorContent !== savedContent;
+  const configDirty = creatingFile
+    ? Boolean(newFilePath.trim()) || editorContent.length > 0
+    : editorContent !== savedContent;
   const skillDirty = skillContent !== savedSkillContent;
   const hasUnsaved =
     (platformSection === "config" && configDirty) ||
@@ -72,17 +76,22 @@ export default function AdminPage() {
     const { root, files } = await api.adminListPlatformFiles();
     setPlatformRoot(root);
     setPlatformFiles(files);
+    setCreatingFile(false);
+    setNewFilePath("");
     const path =
       pickPath && files.includes(pickPath)
         ? pickPath
         : files.includes("config.yaml")
           ? "config.yaml"
-          : files[0] || "config.yaml";
+          : files[0] || "";
     setSelectedFile(path);
-    if (files.includes(path)) {
+    if (path && files.includes(path)) {
       const { content } = await api.adminReadPlatformFile(path);
       setEditorContent(content);
       setSavedContent(content);
+    } else {
+      setEditorContent("");
+      setSavedContent("");
     }
   }, []);
 
@@ -189,11 +198,23 @@ export default function AdminPage() {
 
   const openFile = async (path: string) => {
     if (configDirty && !window.confirm("Discard unsaved changes?")) return;
+    setCreatingFile(false);
+    setNewFilePath("");
     setSelectedFile(path);
     setSaveMsg(null);
     const { content } = await api.adminReadPlatformFile(path);
     setEditorContent(content);
     setSavedContent(content);
+  };
+
+  const startNewFile = () => {
+    if (configDirty && !window.confirm("Discard unsaved changes?")) return;
+    setCreatingFile(true);
+    setSelectedFile("");
+    setNewFilePath("");
+    setEditorContent("");
+    setSavedContent("");
+    setSaveMsg(null);
   };
 
   const openSkill = async (id: string) => {
@@ -222,9 +243,33 @@ export default function AdminPage() {
     setSaveMsg(null);
     setError(null);
     try {
-      await api.adminWritePlatformFile(selectedFile, editorContent);
-      setSavedContent(editorContent);
-      setSaveMsg(`Saved ${selectedFile}`);
+      if (creatingFile) {
+        const path = newFilePath.trim().replace(/^\/+/, "").replace(/\\/g, "/");
+        if (!path) throw new Error("File path is required");
+        await api.adminCreatePlatformFile(path, editorContent);
+        setSaveMsg(`Created ${path}`);
+        await loadConfig(path);
+      } else {
+        await api.adminWritePlatformFile(selectedFile, editorContent);
+        setSavedContent(editorContent);
+        setSaveMsg(`Saved ${selectedFile}`);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
+  const handleDeleteFile = async () => {
+    if (creatingFile || !selectedFile) return;
+    if (!window.confirm(`Delete "${selectedFile}" from the platform directory?`)) return;
+    setSaveBusy(true);
+    setError(null);
+    try {
+      await api.adminDeletePlatformFile(selectedFile);
+      setSaveMsg(`Deleted ${selectedFile}`);
+      await loadConfig();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -303,7 +348,7 @@ export default function AdminPage() {
   };
 
   const handleSyncSection = async (section: PlatformSection) => {
-    if (section === "config" && configDirty) {
+    if (section === "config" && (configDirty || creatingFile)) {
       setError("Save config files before syncing.");
       return;
     }
@@ -561,15 +606,26 @@ export default function AdminPage() {
             {platformSection === "config" && (
               <div className="admin-platform-layout">
                 <aside className="admin-file-list">
-                  <div className="admin-file-list-head">Files</div>
+                  <div className="admin-file-list-head admin-file-list-head-row">
+                    <span>Files</span>
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-ghost admin-btn-xs"
+                      onClick={startNewFile}
+                    >
+                      + New
+                    </button>
+                  </div>
                   {platformLoading ? (
                     <p className="admin-muted admin-file-empty">Loading…</p>
+                  ) : platformFiles.length === 0 && !creatingFile ? (
+                    <p className="admin-muted admin-file-empty">No files yet.</p>
                   ) : (
                     platformFiles.map((f) => (
                       <button
                         key={f}
                         type="button"
-                        className={`admin-file-item ${f === selectedFile ? "active" : ""}`}
+                        className={`admin-file-item ${f === selectedFile && !creatingFile ? "active" : ""}`}
                         onClick={() => openFile(f)}
                       >
                         {f}
@@ -578,35 +634,79 @@ export default function AdminPage() {
                   )}
                 </aside>
                 <div className="admin-editor-panel">
-                  <div className="admin-editor-toolbar">
-                    <span className="admin-editor-path">{selectedFile}</span>
-                    {configDirty && <span className="admin-badge is-pending">Unsaved</span>}
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-ghost"
-                      disabled={saveBusy || !configDirty}
-                      onClick={handleSaveConfig}
-                    >
-                      {saveBusy ? "Saving…" : "Save"}
-                    </button>
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-primary"
-                      disabled={syncBusySection !== null || configDirty}
-                      onClick={() => handleSyncSection("config")}
-                    >
-                      {syncBusySection === "config" ? "Syncing…" : "Sync config"}
-                    </button>
-                  </div>
-                  <textarea
-                    className="admin-code-editor"
-                    spellCheck={false}
-                    value={editorContent}
-                    onChange={(e) => {
-                      setEditorContent(e.target.value);
-                      setSaveMsg(null);
-                    }}
-                  />
+                  {creatingFile || selectedFile ? (
+                    <>
+                      <div className="admin-editor-toolbar">
+                        {creatingFile ? (
+                          <label className="admin-label admin-editor-new-path">
+                            New file path
+                            <input
+                              className="admin-input"
+                              placeholder="SOUL.md or notes/README.md"
+                              value={newFilePath}
+                              onChange={(e) => {
+                                setNewFilePath(e.target.value);
+                                setSaveMsg(null);
+                              }}
+                              autoFocus
+                            />
+                          </label>
+                        ) : (
+                          <span className="admin-editor-path">{selectedFile}</span>
+                        )}
+                        {configDirty && <span className="admin-badge is-pending">Unsaved</span>}
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-ghost"
+                          disabled={
+                            saveBusy ||
+                            (creatingFile ? !newFilePath.trim() : !configDirty)
+                          }
+                          onClick={handleSaveConfig}
+                        >
+                          {saveBusy ? "Saving…" : creatingFile ? "Create" : "Save"}
+                        </button>
+                        {!creatingFile && selectedFile && (
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn-ghost admin-btn-danger"
+                            disabled={saveBusy}
+                            onClick={handleDeleteFile}
+                          >
+                            Delete
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-primary"
+                          disabled={
+                            syncBusySection !== null || configDirty || creatingFile
+                          }
+                          onClick={() => handleSyncSection("config")}
+                        >
+                          {syncBusySection === "config" ? "Syncing…" : "Sync config"}
+                        </button>
+                      </div>
+                      <textarea
+                        className="admin-code-editor"
+                        spellCheck={false}
+                        value={editorContent}
+                        onChange={(e) => {
+                          setEditorContent(e.target.value);
+                          setSaveMsg(null);
+                        }}
+                        placeholder={
+                          creatingFile
+                            ? "# New platform file…"
+                            : undefined
+                        }
+                      />
+                    </>
+                  ) : (
+                    <p className="admin-muted admin-file-empty">
+                      No file selected. Click + New to add one.
+                    </p>
+                  )}
                 </div>
               </div>
             )}

@@ -19,6 +19,10 @@ Full write-up: [docs/fly-agent-gateway-sync.md](../../docs/fly-agent-gateway-syn
 
 Admin sync writes `/opt/data` immediately. **config.yaml** and **.env** usually do **not** apply to a running gateway until the next cold start. Skills are more flexible but disk is updated either way. Prefer stop-after-sync (optional) over in-place restart — never in-place restart.
 
+## Config/skills Fly upload (gzip tar)
+
+Do **not** mix tar stderr into the gzip buffer. Do **not** auto-retry a single `>>` base64 append (duplicate chunk → `gzip: not in gzip format`). Keep chunks small (~8 KB); on failure restart the whole upload; verify with `gzip -t` before extract. Staging with a tiny `config.yaml` does **not** exercise the prod-size multi-chunk path.
+
 ## Duplicate-gateway race
 
 Foreground gateway + reconciler starting a supervised gateway when `gateway_state.json` is `running` → exit code 1. Keep `016-musely-foreground-gateway` resetting state to `stopped` when `NO_SUPERVISE=1`.

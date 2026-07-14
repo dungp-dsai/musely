@@ -108,6 +108,21 @@ export const api = {
       body: JSON.stringify({ path, content }),
     }).then(json),
 
+  adminCreatePlatformFile: (
+    path: string,
+    content?: string
+  ): Promise<{ path: string; bytes: number }> =>
+    apiFetch("/api/admin/musely-agent/platform/file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content: content ?? "" }),
+    }).then(json),
+
+  adminDeletePlatformFile: (path: string): Promise<{ path: string; deleted: boolean }> =>
+    apiFetch(`/api/admin/musely-agent/platform/file?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    }).then(json),
+
   adminListPlatformSecrets: (): Promise<{
     entries: { key: string; masked: string | null; hasValue: boolean }[];
     note: string;

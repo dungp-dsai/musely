@@ -123,6 +123,44 @@ Preferred post-sync behavior on Fly:
 
 ---
 
+## Admin sync upload path (config / skills tar)
+
+Backend and agent do **not** share a filesystem. For `config` / `skills`, the backend:
+
+1. Builds a **gzip tar** of selected paths under `MUSELY_AGENT_PLATFORM_MOUNT` (`createPlatformTarBuffer`)
+2. Base64-chunks it and `printf`s each chunk onto the agent via Fly Machines **exec**
+3. Decodes + extracts under `/tmp/musely-platform`, then copies into `/opt/data`
+
+Platform dirs are **per environment** (`/data/musely-agent-platform` on each backend volume). Staging and prod configs are independent.
+
+### Note — Jul 2026: prod config sync gzip failure (staging OK)
+
+**Symptom (admin panel):**
+
+```text
+Config: synced 0/1 agents (1 failed).
+…: gzip: stdin: not in gzip format tar: Child returned status 1 …
+```
+
+**Why staging looked fine:** staging’s `config.yaml` was tiny (~42 bytes), so the upload was one small chunk. Prod had a full Hermes config (~72 KB) → multi-chunk / large `printf` path. Skills often still worked on prod because the skills tarball stayed smaller (~1 chunk).
+
+**Root causes (do not regress):**
+
+| Bug | Effect |
+|-----|--------|
+| `createPlatformTarBuffer` mixed tar **stderr into the gzip buffer** | Corrupt archive encoded as “valid” base64 |
+| Fly exec **auto-retry** on `>>` append | Successful write + lost ACK → **duplicate** chunk → decode not gzip |
+| Oversized chunks (~32 KB single-quoted `printf`) | Fragile under guest exec for large prod configs |
+
+**Hard rules for the upload helper (`uploadPlatformTarToMachine`):**
+
+1. Keep tar **stdout** only in the buffer; never append stderr.
+2. Use small base64 chunks (~8 KB). Prefer restarting the **whole** upload on failure — never retry a single `>>` append alone.
+3. After decode: check base64 length, run `gzip -t`, then `tar -xzf`.
+4. When testing “Sync config” on staging, use a **realistic-size** `config.yaml` (not a one-line stub), or the multi-chunk path won’t be exercised.
+
+---
+
 ## Symptom → cause cheat sheet
 
 | Error / symptom | Likely cause | Fix direction |
@@ -133,6 +171,7 @@ Preferred post-sync behavior on Fly:
 | `412 machine not running` | VM already stopped (often after restart/SIGTERM) | Don’t retry blindly; start or leave stopped after sync |
 | Machine exits **143** ~1–2s after boot | Supervised CMD without `--no-supervise` under unshare | Restore `--no-supervise` + `HERMES_GATEWAY_NO_SUPERVISE=1` |
 | Machine starts then stops (code 1) at boot | Duplicate gateway (foreground + reconcile) | Keep `016` + `NO_SUPERVISE=1` |
+| `gzip: stdin: not in gzip format` on admin Sync config | Corrupt / duplicated base64 tar upload (large config); stderr mixed into tar; append+retry | See **Admin sync upload path**; small chunks + whole-upload restart + `gzip -t` |
 
 ---
 
@@ -142,6 +181,8 @@ Preferred post-sync behavior on Fly:
 |---------|--------|
 | Ensure / recreate missing machine | `ensureInstance` in `musely-agent-orchestrator-fly.js` |
 | Volume sync exec | `execOnAgentVolume`, `syncPlatformToUserVolume` |
+| Tar build + base64 chunking | `createPlatformTarBuffer`, `chunkBase64` in `musely-agent-platform-sync-runner.js` |
+| Fly tar upload / extract | `uploadPlatformTarToMachine` in `musely-agent-orchestrator-fly.js` |
 | Post-sync “restart” | `restartUserAgentAfterSync` — must **not** call `hermes gateway restart` |
 | Foreground CMD enforcement | `GATEWAY_CMD`, `ensureForegroundGateway`, `ensureMachineGatewayCmd` |
 | Agent image CMD/ENV | `apps/agent/Dockerfile` |

@@ -107,6 +107,8 @@ import {
   listPlatformFiles,
   readPlatformFile,
   writePlatformFile,
+  createPlatformFile,
+  deletePlatformFile,
 } from "./musely-agent-platform-files.js";
 import {
   setPlatformSecret,
@@ -387,6 +389,25 @@ app.put("/api/admin/musely-agent/platform/file", requireAdmin, (req, res) => {
     const path = String(req.body?.path || "");
     const content = req.body?.content ?? "";
     res.json(writePlatformFile(path, content));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/musely-agent/platform/file", requireAdmin, (req, res) => {
+  try {
+    const path = String(req.body?.path || "");
+    const content = req.body?.content ?? "";
+    res.status(201).json(createPlatformFile(path, content));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/admin/musely-agent/platform/file", requireAdmin, (req, res) => {
+  try {
+    const path = String(req.query.path || req.body?.path || "");
+    res.json(deletePlatformFile(path));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
