@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  unlinkSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -109,4 +110,27 @@ export function writePlatformFile(relPath, content) {
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, String(content ?? ""), "utf8");
   return { path: rel, bytes: Buffer.byteLength(String(content ?? ""), "utf8") };
+}
+
+/** Create a new editable platform file (fails if it already exists). */
+export function createPlatformFile(relPath, content = "") {
+  const { rel, abs } = resolvePlatformFile(relPath);
+  if (!isEditableFile(rel)) {
+    throw new Error(
+      `File is not editable: ${rel} (use .yaml/.yml/.md/.txt/.json/.sh, not skills/ or .env)`
+    );
+  }
+  if (existsSync(abs)) throw new Error(`File already exists: ${rel}`);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, String(content ?? ""), "utf8");
+  return { path: rel, bytes: Buffer.byteLength(String(content ?? ""), "utf8") };
+}
+
+/** Delete an editable platform file from the platform directory. */
+export function deletePlatformFile(relPath) {
+  const { rel, abs } = resolvePlatformFile(relPath);
+  if (!isEditableFile(rel)) throw new Error(`File is not editable: ${rel}`);
+  if (!existsSync(abs)) throw new Error(`File not found: ${rel}`);
+  unlinkSync(abs);
+  return { path: rel, deleted: true };
 }
