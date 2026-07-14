@@ -385,7 +385,14 @@ export async function getPost(id, userId) {
     .prepare("SELECT * FROM versions WHERE post_id = ? ORDER BY version_number DESC")
     .all(id);
   post.feedback = db
-    .prepare("SELECT * FROM feedback WHERE post_id = ? ORDER BY created_at DESC")
+    .prepare(
+      `SELECT f.*,
+              (SELECT MAX(w.created_at) FROM ai_task_work w WHERE w.task_id = f.id) AS last_work_at,
+              (SELECT COUNT(*) FROM ai_task_work w WHERE w.task_id = f.id) AS work_count
+       FROM feedback f
+       WHERE f.post_id = ?
+       ORDER BY f.created_at DESC`
+    )
     .all(id);
   return post;
 }
@@ -456,7 +463,14 @@ export async function getPostForAgent(id) {
     .prepare("SELECT * FROM versions WHERE post_id = ? ORDER BY version_number DESC")
     .all(id);
   post.feedback = db
-    .prepare("SELECT * FROM feedback WHERE post_id = ? ORDER BY created_at DESC")
+    .prepare(
+      `SELECT f.*,
+              (SELECT MAX(w.created_at) FROM ai_task_work w WHERE w.task_id = f.id) AS last_work_at,
+              (SELECT COUNT(*) FROM ai_task_work w WHERE w.task_id = f.id) AS work_count
+       FROM feedback f
+       WHERE f.post_id = ?
+       ORDER BY f.created_at DESC`
+    )
     .all(id);
   return post;
 }
@@ -586,8 +600,11 @@ export async function addAiTaskWork(taskId, result) {
 }
 
 export async function listAiTaskWork(taskId) {
+  // Oldest → newest so the latest findings sit at the bottom (where the
+  // findings panel scrolls after load). DESC + scroll-to-bottom was landing
+  // users on the oldest result and looking like “wrong / stale time”.
   return db
-    .prepare("SELECT * FROM ai_task_work WHERE task_id = ? ORDER BY created_at DESC")
+    .prepare("SELECT * FROM ai_task_work WHERE task_id = ? ORDER BY created_at ASC, id ASC")
     .all(taskId);
 }
 

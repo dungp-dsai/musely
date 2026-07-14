@@ -380,6 +380,7 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
             <TaskChatPanel
               taskId={chatTask.id}
               feedback={chatTask}
+              refreshKey={writingRevision}
               onClose={() => setChatTaskId(null)}
               onMarkDone={markFeedbackDone}
               onCancel={removeFeedback}

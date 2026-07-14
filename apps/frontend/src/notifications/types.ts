@@ -33,5 +33,5 @@ export interface NotificationToast {
   id: string;
   title: string;
   body: string;
-  tone: "success" | "error";
+  tone: "success" | "error" | "info";
 }

@@ -3,11 +3,13 @@ import { createPortal } from "react-dom";
 import type { Feedback, TaskThread } from "../types";
 import { api } from "../api";
 import { TASK_COLORS } from "../extensions/taskHighlight";
-import { relativeTime } from "../utils";
+import { formatDateTime, relativeTime } from "../utils";
 
 interface Props {
   taskId: number;
   feedback: Feedback;
+  /** Bumps when a writing-queue job finishes so open panels refetch findings. */
+  refreshKey?: number;
   onClose: () => void;
   onMarkDone: (id: number) => void;
   onCancel: (id: number) => void;
@@ -38,7 +40,25 @@ function renderSimpleMarkdown(text: string) {
   });
 }
 
-export default function TaskChatPanel({ taskId, feedback, onClose, onMarkDone, onCancel }: Props) {
+function WorkTimestamp({ ts }: { ts: string }) {
+  const absolute = formatDateTime(ts);
+  const relative = relativeTime(ts);
+  return (
+    <time className="muted tiny" dateTime={ts} title={absolute}>
+      {absolute}
+      {relative ? ` · ${relative}` : ""}
+    </time>
+  );
+}
+
+export default function TaskChatPanel({
+  taskId,
+  feedback,
+  refreshKey = 0,
+  onClose,
+  onMarkDone,
+  onCancel,
+}: Props) {
   const [thread, setThread] = useState<TaskThread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +83,7 @@ export default function TaskChatPanel({ taskId, feedback, onClose, onMarkDone, o
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -123,6 +143,9 @@ export default function TaskChatPanel({ taskId, feedback, onClose, onMarkDone, o
     }
   };
 
+  const latestWorkId =
+    thread && thread.work.length > 0 ? thread.work[thread.work.length - 1].id : null;
+
   return createPortal(
     <div className="task-chat-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="task-chat-modal" style={{ borderTopColor: color.border }}>
@@ -177,12 +200,20 @@ export default function TaskChatPanel({ taskId, feedback, onClose, onMarkDone, o
               )}
 
               {thread.work.map((w) => (
-                <div key={w.id} className="task-chat-findings">
+                <div
+                  key={w.id}
+                  className={`task-chat-findings${w.id === latestWorkId ? " is-latest" : ""}`}
+                >
                   <div className="task-chat-findings-head">
                     <span className="task-chat-avatar ai">H</span>
                     <div>
-                      <div className="task-chat-msg-name">Hermes · Findings</div>
-                      <div className="muted tiny">{relativeTime(w.created_at)}</div>
+                      <div className="task-chat-msg-name">
+                        Hermes · Findings
+                        {w.id === latestWorkId ? (
+                          <span className="task-chat-latest-tag">Latest</span>
+                        ) : null}
+                      </div>
+                      <WorkTimestamp ts={w.created_at} />
                     </div>
                   </div>
                   <div className="task-chat-findings-body">{renderSimpleMarkdown(w.result)}</div>
@@ -197,7 +228,7 @@ export default function TaskChatPanel({ taskId, feedback, onClose, onMarkDone, o
                       <div className="task-chat-msg-name">
                         Hermes · Action report (v{thread.report.version_number})
                       </div>
-                      <div className="muted tiny">{relativeTime(thread.report.created_at)}</div>
+                      <WorkTimestamp ts={thread.report.created_at} />
                     </div>
                   </div>
                   <div className="task-chat-findings-body">{renderSimpleMarkdown(thread.report.summary_action_report)}</div>

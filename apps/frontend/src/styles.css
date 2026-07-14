@@ -2155,6 +2155,25 @@ button {
   padding: 12px 14px;
 }
 
+.task-chat-findings.is-latest {
+  border-color: color-mix(in srgb, var(--accent) 45%, #c8daf5);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.task-chat-latest-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  text-transform: none;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, #fff);
+}
+
 .task-chat-findings-head {
   display: flex;
   gap: 10px;
@@ -2238,6 +2257,10 @@ button {
 }
 
 .task-chat-msg-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 0;
   font-size: 11px;
   font-weight: 700;
   color: var(--muted);
@@ -6588,6 +6611,10 @@ a.wl-signin {
 
 .noti-toast.tone-error {
   border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+}
+
+.noti-toast.tone-info {
+  border-color: color-mix(in srgb, var(--muted) 35%, var(--line));
 }
 
 @keyframes noti-toast-in {

@@ -159,7 +159,18 @@ export default function QueuePanel({
                       <span className={`status-pill ${f.status}`}>
                         {f.status === "in_progress" ? "in progress" : f.status}
                       </span>
-                      <span className="muted tiny">{relativeTime(f.created_at)}</span>
+                      <span
+                        className="muted tiny"
+                        title={
+                          f.last_work_at
+                            ? `Findings saved ${f.last_work_at}`
+                            : `Queued ${f.created_at}`
+                        }
+                      >
+                        {f.last_work_at
+                          ? `Findings · ${relativeTime(f.last_work_at)}`
+                          : relativeTime(f.created_at)}
+                      </span>
                     </div>
                     <div className="queue-field">
                       <span className="queue-label">Context</span>

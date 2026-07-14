@@ -153,7 +153,15 @@ export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
   return (
     <div className={`noti-toast tone-${toast.tone}`} role="status">
       <button type="button" className="noti-toast-main" onClick={handleToastClick}>
-        <StatusDot status={toast.tone === "success" ? "done" : "error"} />
+        <StatusDot
+          status={
+            toast.tone === "success"
+              ? "done"
+              : toast.tone === "info"
+                ? "cancelled"
+                : "error"
+          }
+        />
         <div>
           <div className="noti-toast-title">{toast.title}</div>
           <div className="noti-toast-body">{toast.body}</div>

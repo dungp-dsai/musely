@@ -287,7 +287,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       writingInFlight.current = true;
 
       try {
-        await api.runWritingQueue({
+        const { freshFindings } = await api.runWritingQueue({
           postId: opts.postId,
           postTitle: opts.postTitle,
           taskCount: opts.taskCount,
@@ -315,11 +315,30 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           hour: "numeric",
           minute: "2-digit",
         });
-        const n = opts.taskCount;
+
+        if (freshFindings === 0) {
+          const title = "No new findings";
+          const body = `Agent finished, but nothing new was saved · ${when}`;
+          setNotifications((prev) =>
+            patchNotification(prev, id, {
+              status: "done",
+              title,
+              body,
+              error: null,
+              focused: false,
+              read: false,
+              activity: [],
+            })
+          );
+          setWritingRevision((v) => v + 1);
+          showToast({ id, title, body, tone: "info" });
+          return;
+        }
+
         const body =
-          n === 1
-            ? `1 task researched · ${when}`
-            : `${n} tasks researched · ${when}`;
+          freshFindings === 1
+            ? `1 new finding saved · ${when}`
+            : `${freshFindings} new findings saved · ${when}`;
         setNotifications((prev) =>
           patchNotification(prev, id, {
             status: "done",
