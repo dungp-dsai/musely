@@ -53,6 +53,14 @@ export default function App() {
     [focusedFeedJob, backgroundFeedJob]
   );
 
+  const openWriteFromNotification = useCallback(
+    (postId?: number) => {
+      goToView("write");
+      if (postId != null) setSelectedId(postId);
+    },
+    [goToView]
+  );
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const auth = params.get("auth");
@@ -198,7 +206,10 @@ export default function App() {
             />
           </main>
         </div>
-        <NotificationToastHost onOpenFeed={() => goToView("feed")} />
+        <NotificationToastHost
+          onOpenFeed={() => goToView("feed")}
+          onOpenWriting={openWriteFromNotification}
+        />
       </>
     );
   }
@@ -220,7 +231,10 @@ export default function App() {
             />
           </main>
         </div>
-        <NotificationToastHost onOpenFeed={() => goToView("feed")} />
+        <NotificationToastHost
+          onOpenFeed={() => goToView("feed")}
+          onOpenWriting={openWriteFromNotification}
+        />
       </>
     );
   }
@@ -255,7 +269,10 @@ export default function App() {
         </nav>
 
         <div className="home-user">
-          <NotificationCenter onOpenFeed={() => goToView("feed")} />
+          <NotificationCenter
+            onOpenFeed={() => goToView("feed")}
+            onOpenWriting={openWriteFromNotification}
+          />
           <UserMenu
             user={user}
             onOpenProfile={() => goToView("profile")}
@@ -312,7 +329,10 @@ export default function App() {
           </div>
         )}
       </div>
-      <NotificationToastHost onOpenFeed={() => goToView("feed")} />
+      <NotificationToastHost
+        onOpenFeed={() => goToView("feed")}
+        onOpenWriting={openWriteFromNotification}
+      />
     </div>
   );
 }

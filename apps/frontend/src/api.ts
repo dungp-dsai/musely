@@ -255,7 +255,12 @@ export const api = {
     taskCount: number;
     signal?: AbortSignal;
     onWarming?: () => void;
+    onActivity?: (line: string) => void;
   }): Promise<void> => {
+    // Make this piece the active one before waking the agent — /api/active
+    // prefers status=in_progress so the skill doesn't hit the wrong draft.
+    await api.updatePost(opts.postId, { status: "in_progress" });
+
     const n = opts.taskCount;
     const label = n === 1 ? "1 queued task" : `${n} queued tasks`;
     const messages = [
@@ -268,7 +273,7 @@ export const api = {
           `There ${n === 1 ? "is" : "are"} ${label} waiting.`,
           ``,
           `Use the do-research skill to do this correctly (API only):`,
-          `1. GET /api/active and GET /api/active/tasks.`,
+          `1. GET /api/active and GET /api/active/tasks — they must match this post_id.`,
           `2. For each task: claim it, research it, POST findings to /api/feedback/:id/work.`,
           `3. Do not rewrite the draft or touch the UI.`,
           `4. Reply with one short confirmation only.`,
@@ -281,6 +286,7 @@ export const api = {
       body: { messages },
       signal: opts.signal,
       onWarming: opts.onWarming,
+      onLine: opts.onActivity,
     });
     if (isAgentFailureResponse(text)) {
       throw new Error("Couldn't start your agent on the queue. Please try again.");

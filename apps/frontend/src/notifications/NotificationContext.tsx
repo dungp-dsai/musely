@@ -16,18 +16,31 @@ type StartFeedOpts = {
   topicLabel?: string;
 };
 
+type StartWritingQueueOpts = {
+  postId: number;
+  postTitle: string;
+  taskCount: number;
+};
+
 type NotificationContextValue = {
   notifications: AppNotification[];
   unreadCount: number;
   focusedFeedJob: AppNotification | null;
   runningFeedJob: AppNotification | null;
+  focusedWritingJob: AppNotification | null;
+  runningWritingJob: AppNotification | null;
   feedRevision: number;
+  writingRevision: number;
   toast: NotificationToast | null;
   startFeedRefresh: (opts?: StartFeedOpts) => void;
+  startWritingQueue: (opts: StartWritingQueueOpts) => void;
   cancelFeedJob: (id: string) => void;
+  cancelWritingQueueJob: (id: string) => void;
   retryFeedJob: (id: string) => void;
+  retryWritingQueueJob: (id: string) => void;
   backgroundFeedJob: (id: string) => void;
   focusFeedJob: (id: string) => void;
+  focusWritingQueueJob: (id: string) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
   dismiss: (id: string) => void;
@@ -60,37 +73,55 @@ function patchNotification(
   return found ? next : list;
 }
 
+function interruptedCopy(kind: AppNotification["kind"]) {
+  if (kind === "writing_queue") {
+    return {
+      title: "Queue run interrupted",
+      body: "This queue run stopped when the page reloaded.",
+    };
+  }
+  return {
+    title: "Feed build interrupted",
+    body: "This build stopped when the page reloaded.",
+  };
+}
+
 function loadStoredNotifications(): AppNotification[] {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as AppNotification[];
     if (!Array.isArray(parsed)) return [];
-    // A reload can't resume an in-flight agent stream — close those out.
-    return parsed.map((n) =>
-      n.status === "running"
-        ? {
-            ...n,
-            status: "cancelled" as const,
-            title: "Feed build interrupted",
-            body: "This build stopped when the page reloaded.",
-            focused: false,
-            read: true,
-            updatedAt: Date.now(),
-          }
-        : n
-    );
+    return parsed.map((n) => {
+      if (n.status !== "running") return n;
+      const copy = interruptedCopy(n.kind);
+      return {
+        ...n,
+        status: "cancelled" as const,
+        title: copy.title,
+        body: copy.body,
+        focused: false,
+        read: true,
+        updatedAt: Date.now(),
+      };
+    });
   } catch {
     return [];
   }
 }
 
+function truncateBody(line: string, max = 72) {
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>(loadStoredNotifications);
   const [feedRevision, setFeedRevision] = useState(0);
+  const [writingRevision, setWritingRevision] = useState(0);
   const [toast, setToast] = useState<NotificationToast | null>(null);
   const abortById = useRef<Map<string, AbortController>>(new Map());
-  const inFlight = useRef(false);
+  const feedInFlight = useRef(false);
+  const writingInFlight = useRef(false);
 
   useEffect(() => {
     try {
@@ -111,7 +142,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       abortById.current.get(id)?.abort();
       const controller = new AbortController();
       abortById.current.set(id, controller);
-      inFlight.current = true;
+      feedInFlight.current = true;
 
       try {
         await api.refreshFeed({
@@ -130,7 +161,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
               const activity = [...current.activity, line];
               return patchNotification(prev, id, {
                 activity,
-                body: line.length > 72 ? `${line.slice(0, 72)}…` : line,
+                body: truncateBody(line),
               });
             }),
         });
@@ -177,7 +208,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
             postCount: count,
             activity: [],
           });
-          // If the running row was lost (remount/race), still record completion.
           if (!patched.some((n) => n.id === id)) {
             return [
               {
@@ -242,8 +272,109 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         });
       } finally {
         abortById.current.delete(id);
-        inFlight.current = false;
+        feedInFlight.current = false;
         void topicLabel;
+      }
+    },
+    [showToast]
+  );
+
+  const runWritingQueueJob = useCallback(
+    async (id: string, opts: StartWritingQueueOpts) => {
+      abortById.current.get(id)?.abort();
+      const controller = new AbortController();
+      abortById.current.set(id, controller);
+      writingInFlight.current = true;
+
+      try {
+        await api.runWritingQueue({
+          postId: opts.postId,
+          postTitle: opts.postTitle,
+          taskCount: opts.taskCount,
+          signal: controller.signal,
+          onWarming: () =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                activity: ["Waking your agent"],
+                body: "Waking your agent…",
+              })
+            ),
+          onActivity: (line) =>
+            setNotifications((prev) => {
+              const current = prev.find((n) => n.id === id);
+              if (!current || current.status !== "running") return prev;
+              const activity = [...current.activity, line];
+              return patchNotification(prev, id, {
+                activity,
+                body: truncateBody(line),
+              });
+            }),
+        });
+
+        const when = new Date().toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const n = opts.taskCount;
+        const body =
+          n === 1
+            ? `1 task researched · ${when}`
+            : `${n} tasks researched · ${when}`;
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "done",
+            title: "Queue research done",
+            body,
+            error: null,
+            focused: false,
+            read: false,
+            activity: [],
+          })
+        );
+        setWritingRevision((v) => v + 1);
+        showToast({
+          id,
+          title: "Queue research done",
+          body,
+          tone: "success",
+        });
+      } catch (e) {
+        const err = e as Error;
+        if (err.name === "AbortError" || /aborted/i.test(err.message)) {
+          setNotifications((prev) =>
+            patchNotification(prev, id, {
+              status: "cancelled",
+              title: "Queue run cancelled",
+              body: "You stopped this queue run.",
+              focused: false,
+              read: true,
+            })
+          );
+          return;
+        }
+        const message = toUserFacingError(
+          err.message,
+          "Couldn't start your agent on the queue. Please try again."
+        );
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "error",
+            title: "Couldn't finish the queue",
+            body: message,
+            error: message,
+            focused: true,
+            read: false,
+          })
+        );
+        showToast({
+          id,
+          title: "Queue run failed",
+          body: message,
+          tone: "error",
+        });
+      } finally {
+        abortById.current.delete(id);
+        writingInFlight.current = false;
       }
     },
     [showToast]
@@ -251,8 +382,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const startFeedRefresh = useCallback(
     (opts?: StartFeedOpts) => {
-      if (inFlight.current) return;
-      inFlight.current = true;
+      if (feedInFlight.current) return;
+      feedInFlight.current = true;
 
       const id = makeId();
       const topicLabel = opts?.topicLabel?.trim() || undefined;
@@ -277,7 +408,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       };
 
       setNotifications((prev) => {
-        // Keep every prior notification. Only close out a stuck running row.
         const kept = prev.map((n) =>
           n.kind === "feed_build" && n.status === "running"
             ? {
@@ -289,7 +419,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
                 read: true,
                 updatedAt: now,
               }
-            : { ...n, focused: false }
+            : n.kind === "feed_build"
+              ? { ...n, focused: false }
+              : n
         );
         return [next, ...kept.filter((n) => n.id !== id)].slice(0, MAX_NOTIFICATIONS);
       });
@@ -299,10 +431,68 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     [runFeedJob]
   );
 
+  const startWritingQueue = useCallback(
+    (opts: StartWritingQueueOpts) => {
+      if (writingInFlight.current) return;
+      writingInFlight.current = true;
+
+      const id = makeId();
+      const now = Date.now();
+      const titleSnippet =
+        opts.postTitle.trim().length > 42
+          ? `${opts.postTitle.trim().slice(0, 42)}…`
+          : opts.postTitle.trim() || "Untitled";
+      const n = opts.taskCount;
+      const next: AppNotification = {
+        id,
+        kind: "writing_queue",
+        title: "Researching your queue",
+        body:
+          n === 1
+            ? `Working 1 task on “${titleSnippet}”`
+            : `Working ${n} tasks on “${titleSnippet}”`,
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+        read: true,
+        focused: true,
+        activity: [],
+        postId: opts.postId,
+        postTitle: opts.postTitle,
+        taskCount: opts.taskCount,
+        runKey: 0,
+        startedAt: now,
+        error: null,
+      };
+
+      setNotifications((prev) => {
+        const kept = prev.map((n) =>
+          n.kind === "writing_queue" && n.status === "running"
+            ? {
+                ...n,
+                status: "cancelled" as const,
+                title: "Queue run cancelled",
+                body: "Superseded by a newer queue run.",
+                focused: false,
+                read: true,
+                updatedAt: now,
+              }
+            : n.kind === "writing_queue"
+              ? { ...n, focused: false }
+              : n
+        );
+        return [next, ...kept.filter((row) => row.id !== id)].slice(0, MAX_NOTIFICATIONS);
+      });
+
+      void runWritingQueueJob(id, opts);
+    },
+    [runWritingQueueJob]
+  );
+
   const cancelFeedJob = useCallback((id: string) => {
     abortById.current.get(id)?.abort();
     abortById.current.delete(id);
-    inFlight.current = false;
+    feedInFlight.current = false;
     setNotifications((prev) =>
       patchNotification(prev, id, {
         status: "cancelled",
@@ -314,14 +504,42 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const cancelWritingQueueJob = useCallback((id: string) => {
+    abortById.current.get(id)?.abort();
+    abortById.current.delete(id);
+    writingInFlight.current = false;
+    setNotifications((prev) =>
+      patchNotification(prev, id, {
+        status: "cancelled",
+        title: "Queue run cancelled",
+        body: "You stopped this queue run.",
+        focused: false,
+        read: true,
+      })
+    );
+  }, []);
+
   const retryFeedJob = useCallback(
     (id: string) => {
-      if (inFlight.current) return;
-      // Retry = brand-new history row (don't overwrite the failed one).
+      if (feedInFlight.current) return;
       const existing = notifications.find((n) => n.id === id);
       startFeedRefresh({ topicLabel: existing?.topicLabel });
     },
     [notifications, startFeedRefresh]
+  );
+
+  const retryWritingQueueJob = useCallback(
+    (id: string) => {
+      if (writingInFlight.current) return;
+      const existing = notifications.find((n) => n.id === id);
+      if (!existing?.postId) return;
+      startWritingQueue({
+        postId: existing.postId,
+        postTitle: existing.postTitle || "Untitled",
+        taskCount: existing.taskCount || 1,
+      });
+    },
+    [notifications, startWritingQueue]
   );
 
   const backgroundFeedJob = useCallback((id: string) => {
@@ -345,6 +563,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const focusWritingQueueJob = useCallback((id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.id === id
+          ? { ...n, focused: true, updatedAt: Date.now() }
+          : n.kind === "writing_queue" && n.status === "running"
+            ? { ...n, focused: false }
+            : n
+      )
+    );
+  }, []);
+
   const markRead = useCallback((id: string) => {
     setNotifications((prev) => patchNotification(prev, id, { read: true }));
   }, []);
@@ -360,11 +590,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (job) {
       job.abort();
       abortById.current.delete(id);
-      inFlight.current = false;
+      const item = notifications.find((n) => n.id === id);
+      if (item?.kind === "writing_queue") writingInFlight.current = false;
+      else feedInFlight.current = false;
     }
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     setToast((t) => (t?.id === id ? null : t));
-  }, []);
+  }, [notifications]);
 
   const focusedFeedJob =
     notifications.find(
@@ -375,7 +607,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ) ?? null;
 
   const runningFeedJob =
-    notifications.find((n) => n.kind === "feed_build" && n.status === "running") ??
+    notifications.find((n) => n.kind === "feed_build" && n.status === "running") ?? null;
+
+  const focusedWritingJob =
+    notifications.find(
+      (n) =>
+        n.kind === "writing_queue" &&
+        n.focused &&
+        (n.status === "running" || n.status === "error")
+    ) ?? null;
+
+  const runningWritingJob =
+    notifications.find((n) => n.kind === "writing_queue" && n.status === "running") ??
     null;
 
   const unreadCount = notifications.filter(
@@ -388,13 +631,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       unreadCount,
       focusedFeedJob,
       runningFeedJob,
+      focusedWritingJob,
+      runningWritingJob,
       feedRevision,
+      writingRevision,
       toast,
       startFeedRefresh,
+      startWritingQueue,
       cancelFeedJob,
+      cancelWritingQueueJob,
       retryFeedJob,
+      retryWritingQueueJob,
       backgroundFeedJob,
       focusFeedJob,
+      focusWritingQueueJob,
       markRead,
       markAllRead,
       dismiss,
@@ -405,13 +655,20 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       unreadCount,
       focusedFeedJob,
       runningFeedJob,
+      focusedWritingJob,
+      runningWritingJob,
       feedRevision,
+      writingRevision,
       toast,
       startFeedRefresh,
+      startWritingQueue,
       cancelFeedJob,
+      cancelWritingQueueJob,
       retryFeedJob,
+      retryWritingQueueJob,
       backgroundFeedJob,
       focusFeedJob,
+      focusWritingQueueJob,
       markRead,
       markAllRead,
       dismiss,

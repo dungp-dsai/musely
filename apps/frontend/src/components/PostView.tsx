@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Post, Version } from "../types";
 import { api } from "../api";
+import { useNotifications } from "../notifications/NotificationContext";
 import { relativeTime, formatDateTime, htmlToText } from "../utils";
 import DiffView from "./DiffView";
 import Editor from "./Editor";
@@ -34,11 +35,32 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
   const [focusedFeedbackId, setFocusedFeedbackId] = useState<number | null>(null);
   const [chatTaskId, setChatTaskId] = useState<number | null>(null);
   const [aiPull, setAiPull] = useState<{ id: number; content: string } | null>(null);
-  const [startState, setStartState] = useState<QueueStartState>("idle");
-  const [startError, setStartError] = useState<string | null>(null);
+  const {
+    startWritingQueue,
+    focusedWritingJob,
+    runningWritingJob,
+    writingRevision,
+  } = useNotifications();
   const persistedDraft = useRef(loadEditorContent(post));
   const autosaveTimer = useRef<ReturnType<typeof setTimeout>>();
-  const startAbortRef = useRef<AbortController | null>(null);
+
+  const queueJob =
+    runningWritingJob?.postId === post.id
+      ? runningWritingJob
+      : focusedWritingJob?.postId === post.id
+        ? focusedWritingJob
+        : null;
+
+  const startState: QueueStartState =
+    queueJob?.status === "error"
+      ? "error"
+      : queueJob?.status === "running"
+        ? queueJob.activity.length === 0 || /wak/i.test(queueJob.body)
+          ? "starting"
+          : "working"
+        : "idle";
+  const startError =
+    queueJob?.status === "error" ? queueJob.error || queueJob.body : null;
 
   // History comparison selection.
   const [toId, setToId] = useState<number | null>(latest?.id ?? null);
@@ -49,11 +71,26 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
     const content = loadEditorContent(post);
     setDraft(content);
     persistedDraft.current = content;
-    startAbortRef.current?.abort();
-    startAbortRef.current = null;
-    setStartState("idle");
-    setStartError(null);
   }, [post.id]);
+
+  useEffect(() => {
+    if (
+      focusedWritingJob?.postId === post.id &&
+      (focusedWritingJob.status === "running" || focusedWritingJob.status === "error")
+    ) {
+      setQueueOpen(true);
+    }
+  }, [
+    focusedWritingJob?.id,
+    focusedWritingJob?.postId,
+    focusedWritingJob?.status,
+    post.id,
+  ]);
+
+  useEffect(() => {
+    if (writingRevision === 0) return;
+    onChanged();
+  }, [writingRevision, onChanged]);
 
   // Adopt AI-written versions when the editor matches the last autosaved draft.
   useEffect(() => {
@@ -188,42 +225,16 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
     setQueueOpen(false);
   };
 
-  const startQueueNow = async () => {
+  const startQueueNow = () => {
     if (startState === "starting" || startState === "working") return;
     const pending = post.feedback.filter((f) => f.status !== "done");
     if (pending.length === 0) return;
-
-    startAbortRef.current?.abort();
-    const controller = new AbortController();
-    startAbortRef.current = controller;
-
-    setStartError(null);
-    setStartState("starting");
     setQueueOpen(true);
-
-    try {
-      await api.runWritingQueue({
-        postId: post.id,
-        postTitle: post.title || "Untitled",
-        taskCount: pending.length,
-        signal: controller.signal,
-        onWarming: () => setStartState("starting"),
-      });
-
-      if (controller.signal.aborted) return;
-      setStartState("working");
-      onChanged();
-      window.setTimeout(() => {
-        setStartState((s) => (s === "working" ? "idle" : s));
-      }, 4000);
-    } catch (e) {
-      const err = e as Error;
-      if (err.name === "AbortError" || /aborted/i.test(err.message)) return;
-      setStartError(err.message || "Couldn't start the agent. Please try again.");
-      setStartState("error");
-    } finally {
-      if (startAbortRef.current === controller) startAbortRef.current = null;
-    }
+    startWritingQueue({
+      postId: post.id,
+      postTitle: post.title || "Untitled",
+      taskCount: pending.length,
+    });
   };
 
   const openScheduleFromQueue = () => {
@@ -382,11 +393,15 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
               selectedId={focusedFeedbackId}
               startState={startState}
               startError={startError}
+              progressActivity={
+                queueJob?.status === "running" ? queueJob.activity : []
+              }
+              progressStartedAt={queueJob?.startedAt}
               onToggle={() => setQueueOpen((v) => !v)}
               onSelect={(id) => openTaskChat(id)}
               onDelete={removeFeedback}
               onMarkDone={markFeedbackDone}
-              onStartNow={() => void startQueueNow()}
+              onStartNow={startQueueNow}
               onScheduleLater={openScheduleFromQueue}
             />
           )}

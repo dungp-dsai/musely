@@ -18,8 +18,14 @@ export async function getActivePostId(userId) {
   const posts = await listPostsForAgent(userId);
   if (!posts.length) return null;
 
-  // Prefer a piece with unfinished feedback; otherwise most recently updated.
-  const withQueue = posts.find((p) => Number(p.pending_feedback) > 0);
+  // Prefer the piece explicitly marked In Progress (Start / schedule sets this).
+  const inProgress = posts.find((p) => p.status === "in_progress");
+  if (inProgress) return inProgress.id;
+
+  // Otherwise a piece with unfinished feedback; else most recently updated.
+  const withQueue = posts.find(
+    (p) => Number(p.open_feedback || p.pending_feedback) > 0
+  );
   if (withQueue) return withQueue.id;
   return posts[0].id;
 }
