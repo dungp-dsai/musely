@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Feedback } from "../types";
 import { relativeTime } from "../utils";
 import { TASK_COLORS } from "../extensions/taskHighlight";
+import { computeWritingQueueTimeline } from "../lib/writingQueueActivity";
 
 export type QueueStartState = "idle" | "starting" | "working" | "error";
 
@@ -11,6 +12,9 @@ interface Props {
   selectedId: number | null;
   startState?: QueueStartState;
   startError?: string | null;
+  /** Live activity lines from the notification-owned agent run. */
+  progressActivity?: string[];
+  progressStartedAt?: number;
   onToggle: () => void;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
@@ -52,6 +56,8 @@ export default function QueuePanel({
   selectedId,
   startState = "idle",
   startError = null,
+  progressActivity = [],
+  progressStartedAt,
   onToggle,
   onSelect,
   onDelete,
@@ -61,8 +67,23 @@ export default function QueuePanel({
 }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [showScheduleHint, setShowScheduleHint] = useState(false);
+  const [, setTick] = useState(0);
   const busy = startState === "starting" || startState === "working";
   const pendingCount = items.filter((f) => f.status === "pending").length;
+
+  useEffect(() => {
+    if (!busy || !open) return;
+    const t = window.setInterval(() => setTick((n) => n + 1), 800);
+    return () => window.clearInterval(t);
+  }, [busy, open]);
+
+  const elapsed = busy ? Date.now() - (progressStartedAt || Date.now()) : 0;
+  const timeline = busy
+    ? computeWritingQueueTimeline(progressActivity, elapsed, false)
+    : null;
+  const activeLabel =
+    timeline?.steps.find((s) => s.status === "active")?.label ?? null;
+  const detail = timeline?.detail || null;
 
   useEffect(() => {
     if (!open) {
@@ -138,7 +159,18 @@ export default function QueuePanel({
                       <span className={`status-pill ${f.status}`}>
                         {f.status === "in_progress" ? "in progress" : f.status}
                       </span>
-                      <span className="muted tiny">{relativeTime(f.created_at)}</span>
+                      <span
+                        className="muted tiny"
+                        title={
+                          f.last_work_at
+                            ? `Findings saved ${f.last_work_at}`
+                            : `Queued ${f.created_at}`
+                        }
+                      >
+                        {f.last_work_at
+                          ? `Findings · ${relativeTime(f.last_work_at)}`
+                          : relativeTime(f.created_at)}
+                      </span>
                     </div>
                     <div className="queue-field">
                       <span className="queue-label">Context</span>
@@ -180,6 +212,31 @@ export default function QueuePanel({
 
           {items.length > 0 && (
             <div className="queue-panel-footer">
+              {busy && (
+                <div className="queue-progress" role="status" aria-live="polite">
+                  <div className="queue-progress-label">
+                    <span className="queue-progress-pulse" aria-hidden />
+                    <strong>{activeLabel || startLabel}</strong>
+                  </div>
+                  {detail && <p className="queue-progress-detail">{detail}</p>}
+                  <div className="queue-progress-bar" aria-hidden>
+                    <span className="queue-progress-fill" />
+                  </div>
+                  {timeline && (
+                    <ol className="queue-progress-steps">
+                      {timeline.steps.map((step) => (
+                        <li
+                          key={step.id}
+                          className={`queue-progress-step is-${step.status}`}
+                        >
+                          {step.label}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              )}
+
               {startError && <p className="queue-start-error">{startError}</p>}
 
               {showScheduleHint ? (

@@ -25,6 +25,9 @@ export interface Feedback {
   resolved_version_id: number | null;
   created_at: string;
   resolved_at: string | null;
+  /** Latest ai_task_work.created_at for this task (if any). */
+  last_work_at?: string | null;
+  work_count?: number;
 }
 
 export interface PostSummary {

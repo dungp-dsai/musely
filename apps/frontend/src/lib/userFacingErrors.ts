@@ -13,13 +13,16 @@ const TECHNICAL_PATTERN =
   /environment variable|CLIENT_URL|AGENT_API_KEY|AGENT_USER_ID|\.env\b|provision|orchestrator|api key|llm api|request failed:\s*\d{3}|fetch failed|network error|musely agent returned/i;
 
 const FAILURE_LANGUAGE =
-  /can't proceed|cannot proceed|aren't set|not set anywhere|missing environment|unable to|couldn't proceed|skill requires/i;
+  /can't proceed|cannot proceed|aren't set|not set anywhere|missing environment|couldn't proceed|couldn't research(?: the queue)?|skill requires|no inference provider|primary provider auth failed/i;
 
-/** Agent replies should be one short line; long or error-like text is treated as failure. */
+/**
+ * Detect agent replies that are clearly blocked/misconfigured failures.
+ * Do NOT use reply length — successful queue/feed runs often end with a long
+ * confirmation after tools finish (we logged response_len=728 on a good run).
+ */
 export function isAgentFailureResponse(text: string): boolean {
   const t = text.trim();
   if (!t) return true;
-  if (t.length > 100) return true;
   if (TECHNICAL_PATTERN.test(t)) return true;
   if (FAILURE_LANGUAGE.test(t)) return true;
   return false;

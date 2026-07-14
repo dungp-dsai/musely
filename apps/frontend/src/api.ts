@@ -248,6 +248,7 @@ export const api = {
   /**
    * Hot-pickup: wake the agent (if needed) and ask it to research the writing
    * queue for the In Progress piece via the do-research skill.
+   * Returns how many new findings rows were stored (0 = agent ran but nothing new).
    */
   runWritingQueue: async (opts: {
     postId: number;
@@ -255,7 +256,26 @@ export const api = {
     taskCount: number;
     signal?: AbortSignal;
     onWarming?: () => void;
-  }): Promise<void> => {
+    onActivity?: (line: string) => void;
+  }): Promise<{ freshFindings: number }> => {
+    // Make this piece the active one before waking the agent — /api/active
+    // prefers status=in_progress so the skill doesn't hit the wrong draft.
+    await api.updatePost(opts.postId, { status: "in_progress" });
+
+    const postBefore = await api.getPost(opts.postId);
+    const openTasks = postBefore.feedback.filter((f) => f.status !== "done");
+    const beforeIds = new Set<number>();
+    await Promise.all(
+      openTasks.map(async (f) => {
+        try {
+          const thread = await api.getTaskThread(f.id);
+          for (const w of thread.work) beforeIds.add(w.id);
+        } catch {
+          /* ignore — treat missing as empty */
+        }
+      })
+    );
+
     const n = opts.taskCount;
     const label = n === 1 ? "1 queued task" : `${n} queued tasks`;
     const messages = [
@@ -268,10 +288,11 @@ export const api = {
           `There ${n === 1 ? "is" : "are"} ${label} waiting.`,
           ``,
           `Use the do-research skill to do this correctly (API only):`,
-          `1. GET /api/active and GET /api/active/tasks.`,
-          `2. For each task: claim it, research it, POST findings to /api/feedback/:id/work.`,
-          `3. Do not rewrite the draft or touch the UI.`,
-          `4. Reply with one short confirmation only.`,
+          `1. GET /api/active and GET /api/active/tasks — they must match this post_id.`,
+          `2. For each task: claim it if needed, then do a FRESH research pass and POST new findings to /api/feedback/:id/work.`,
+          `3. Do NOT skip because older findings already exist — Start means refresh. Leave prior findings in place; always append a new result.`,
+          `4. Do not rewrite the draft or touch the UI.`,
+          `5. Reply with one short confirmation only.`,
         ].join("\n"),
       },
     ];
@@ -281,10 +302,39 @@ export const api = {
       body: { messages },
       signal: opts.signal,
       onWarming: opts.onWarming,
+      onLine: opts.onActivity,
     });
     if (isAgentFailureResponse(text)) {
       throw new Error("Couldn't start your agent on the queue. Please try again.");
     }
+
+    const postAfter = await api.getPost(opts.postId);
+    const afterTasks = postAfter.feedback.filter((f) => f.status !== "done");
+    let freshFindings = 0;
+    await Promise.all(
+      afterTasks.map(async (f) => {
+        try {
+          const thread = await api.getTaskThread(f.id);
+          for (const w of thread.work) {
+            if (!beforeIds.has(w.id)) freshFindings += 1;
+          }
+        } catch {
+          /* ignore */
+        }
+      })
+    );
+
+    // Agent may claim "done" while skipping POSTs — treat that as no new work.
+    if (
+      freshFindings === 0 &&
+      /already (saved|stored|exist)|no re-research|findings (are|already) in place|no new/i.test(
+        text
+      )
+    ) {
+      return { freshFindings: 0 };
+    }
+
+    return { freshFindings };
   },
 
   /** @deprecated Use refreshFeed */

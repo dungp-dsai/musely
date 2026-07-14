@@ -369,10 +369,11 @@ export async function listPosts(userId) {
     .prepare(
       `SELECT p.*,
               (SELECT COUNT(*) FROM versions v WHERE v.post_id = p.id) AS version_count,
-              (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status = 'pending') AS pending_feedback
+              (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status = 'pending') AS pending_feedback,
+              (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status != 'done') AS open_feedback
        FROM posts p
        WHERE p.user_id = ?
-       ORDER BY p.updated_at DESC`
+       ORDER BY CASE WHEN p.status = 'in_progress' THEN 0 ELSE 1 END, p.updated_at DESC`
     )
     .all(userId);
 }
@@ -384,7 +385,14 @@ export async function getPost(id, userId) {
     .prepare("SELECT * FROM versions WHERE post_id = ? ORDER BY version_number DESC")
     .all(id);
   post.feedback = db
-    .prepare("SELECT * FROM feedback WHERE post_id = ? ORDER BY created_at DESC")
+    .prepare(
+      `SELECT f.*,
+              (SELECT MAX(w.created_at) FROM ai_task_work w WHERE w.task_id = f.id) AS last_work_at,
+              (SELECT COUNT(*) FROM ai_task_work w WHERE w.task_id = f.id) AS work_count
+       FROM feedback f
+       WHERE f.post_id = ?
+       ORDER BY f.created_at DESC`
+    )
     .all(id);
   return post;
 }
@@ -405,9 +413,18 @@ export async function setPostStatus(id, userId, status) {
   const post = getPostRow(id, userId);
   if (!post) return null;
 
+  const ts = nowIso();
+  // Only one In Progress piece at a time — demote the previous active piece.
+  if (status === "in_progress") {
+    db.prepare(
+      `UPDATE posts SET status = 'pending', updated_at = ?
+       WHERE user_id = ? AND id != ? AND status = 'in_progress'`
+    ).run(ts, userId, id);
+  }
+
   db.prepare("UPDATE posts SET status = ?, updated_at = ? WHERE id = ?").run(
     status,
-    nowIso(),
+    ts,
     id
   );
   return getPost(id, userId);
@@ -446,7 +463,14 @@ export async function getPostForAgent(id) {
     .prepare("SELECT * FROM versions WHERE post_id = ? ORDER BY version_number DESC")
     .all(id);
   post.feedback = db
-    .prepare("SELECT * FROM feedback WHERE post_id = ? ORDER BY created_at DESC")
+    .prepare(
+      `SELECT f.*,
+              (SELECT MAX(w.created_at) FROM ai_task_work w WHERE w.task_id = f.id) AS last_work_at,
+              (SELECT COUNT(*) FROM ai_task_work w WHERE w.task_id = f.id) AS work_count
+       FROM feedback f
+       WHERE f.post_id = ?
+       ORDER BY f.created_at DESC`
+    )
     .all(id);
   return post;
 }
@@ -457,9 +481,10 @@ export async function listPostsForAgent(userId) {
     .prepare(
       `SELECT p.*,
               (SELECT COUNT(*) FROM versions v WHERE v.post_id = p.id) AS version_count,
-              (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status = 'pending') AS pending_feedback
+              (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status = 'pending') AS pending_feedback,
+              (SELECT COUNT(*) FROM feedback f WHERE f.post_id = p.id AND f.status != 'done') AS open_feedback
        FROM posts p
-       ORDER BY p.updated_at DESC`
+       ORDER BY CASE WHEN p.status = 'in_progress' THEN 0 ELSE 1 END, p.updated_at DESC`
     )
     .all();
 }
@@ -575,8 +600,11 @@ export async function addAiTaskWork(taskId, result) {
 }
 
 export async function listAiTaskWork(taskId) {
+  // Oldest → newest so the latest findings sit at the bottom (where the
+  // findings panel scrolls after load). DESC + scroll-to-bottom was landing
+  // users on the oldest result and looking like “wrong / stale time”.
   return db
-    .prepare("SELECT * FROM ai_task_work WHERE task_id = ? ORDER BY created_at DESC")
+    .prepare("SELECT * FROM ai_task_work WHERE task_id = ? ORDER BY created_at ASC, id ASC")
     .all(taskId);
 }
 

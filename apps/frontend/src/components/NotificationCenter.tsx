@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { computeFeedTimeline } from "../lib/feedActivity";
+import { computeWritingQueueTimeline } from "../lib/writingQueueActivity";
 import { useNotifications } from "../notifications/NotificationContext";
 import type { AppNotification } from "../notifications/types";
 import { relativeTime } from "../utils";
 
 type Props = {
   onOpenFeed?: () => void;
+  onOpenWriting?: (postId?: number) => void;
 };
 
 function BellIcon({ active }: { active?: boolean }) {
@@ -41,13 +43,22 @@ function NotificationRow({
   onSelect: () => void;
   onDismiss: () => void;
 }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (item.status !== "running") return;
+    const t = window.setInterval(() => setTick((n) => n + 1), 800);
+    return () => window.clearInterval(t);
+  }, [item.status, item.id]);
+
   const elapsed =
     item.status === "running"
       ? Date.now() - (item.startedAt || item.createdAt)
       : 0;
   const timeline =
     item.status === "running"
-      ? computeFeedTimeline(item.activity, elapsed, false)
+      ? item.kind === "writing_queue"
+        ? computeWritingQueueTimeline(item.activity, elapsed, false)
+        : computeFeedTimeline(item.activity, elapsed, false)
       : null;
   const activeLabel =
     timeline?.steps.find((s) => s.status === "active")?.label ?? null;
@@ -92,9 +103,29 @@ function NotificationRow({
   );
 }
 
-export function NotificationToastHost({ onOpenFeed }: Props) {
-  const { notifications, toast, dismissToast, markRead, focusFeedJob } =
-    useNotifications();
+function openNotificationDestination(
+  item: AppNotification,
+  opts: {
+    onOpenFeed?: () => void;
+    onOpenWriting?: (postId?: number) => void;
+  }
+) {
+  if (item.kind === "writing_queue") {
+    opts.onOpenWriting?.(item.postId);
+    return;
+  }
+  opts.onOpenFeed?.();
+}
+
+export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
+  const {
+    notifications,
+    toast,
+    dismissToast,
+    markRead,
+    focusFeedJob,
+    focusWritingQueueJob,
+  } = useNotifications();
 
   useEffect(() => {
     if (!toast) return;
@@ -107,18 +138,30 @@ export function NotificationToastHost({ onOpenFeed }: Props) {
   const handleToastClick = () => {
     const item = notifications.find((n) => n.id === toast.id);
     dismissToast();
-    onOpenFeed?.();
-    if (!item) return;
+    if (!item) {
+      onOpenFeed?.();
+      return;
+    }
     markRead(item.id);
+    openNotificationDestination(item, { onOpenFeed, onOpenWriting });
     if (item.status === "running" || item.status === "error") {
-      focusFeedJob(item.id);
+      if (item.kind === "writing_queue") focusWritingQueueJob(item.id);
+      else focusFeedJob(item.id);
     }
   };
 
   return (
     <div className={`noti-toast tone-${toast.tone}`} role="status">
       <button type="button" className="noti-toast-main" onClick={handleToastClick}>
-        <StatusDot status={toast.tone === "success" ? "done" : "error"} />
+        <StatusDot
+          status={
+            toast.tone === "success"
+              ? "done"
+              : toast.tone === "info"
+                ? "cancelled"
+                : "error"
+          }
+        />
         <div>
           <div className="noti-toast-title">{toast.title}</div>
           <div className="noti-toast-body">{toast.body}</div>
@@ -136,7 +179,7 @@ export function NotificationToastHost({ onOpenFeed }: Props) {
   );
 }
 
-export default function NotificationCenter({ onOpenFeed }: Props) {
+export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props) {
   const {
     notifications,
     unreadCount,
@@ -144,7 +187,9 @@ export default function NotificationCenter({ onOpenFeed }: Props) {
     markAllRead,
     dismiss,
     focusFeedJob,
+    focusWritingQueueJob,
     cancelFeedJob,
+    cancelWritingQueueJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -167,17 +212,12 @@ export default function NotificationCenter({ onOpenFeed }: Props) {
 
   const handleSelect = (item: AppNotification) => {
     markRead(item.id);
-    if (item.status === "running") {
-      focusFeedJob(item.id);
-      onOpenFeed?.();
-      setOpen(false);
-      return;
+    openNotificationDestination(item, { onOpenFeed, onOpenWriting });
+    if (item.status === "running" || item.status === "error") {
+      if (item.kind === "writing_queue") focusWritingQueueJob(item.id);
+      else focusFeedJob(item.id);
     }
-    if (item.status === "done" || item.status === "error") {
-      onOpenFeed?.();
-      if (item.status === "error") focusFeedJob(item.id);
-      setOpen(false);
-    }
+    setOpen(false);
   };
 
   return (
@@ -222,7 +262,8 @@ export default function NotificationCenter({ onOpenFeed }: Props) {
             <div className="noti-empty">
               <p className="noti-empty-title">You&apos;re all caught up</p>
               <p className="noti-empty-body">
-                Long-running tasks like building your feed will show up here.
+                Long-running tasks like building your feed or researching the
+                writing queue will show up here.
               </p>
             </div>
           ) : (
@@ -233,8 +274,15 @@ export default function NotificationCenter({ onOpenFeed }: Props) {
                   item={item}
                   onSelect={() => handleSelect(item)}
                   onDismiss={() => {
-                    if (item.status === "running") cancelFeedJob(item.id);
-                    else dismiss(item.id);
+                    if (item.status === "running") {
+                      if (item.kind === "writing_queue") {
+                        cancelWritingQueueJob(item.id);
+                      } else {
+                        cancelFeedJob(item.id);
+                      }
+                    } else {
+                      dismiss(item.id);
+                    }
                   }}
                 />
               ))}

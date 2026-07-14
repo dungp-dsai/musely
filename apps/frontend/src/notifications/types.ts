@@ -1,4 +1,4 @@
-export type NotificationKind = "feed_build";
+export type NotificationKind = "feed_build" | "writing_queue";
 
 export type NotificationStatus = "running" | "done" | "error" | "cancelled";
 
@@ -11,10 +11,17 @@ export interface AppNotification {
   createdAt: number;
   updatedAt: number;
   read: boolean;
-  /** When true, FeedView shows the full building screen for this job. */
+  /**
+   * Feed: full-screen building UI.
+   * Writing queue: keep queue panel open / highlight progress for this post.
+   */
   focused: boolean;
   activity: string[];
   topicLabel?: string;
+  /** Writing-queue jobs only. */
+  postId?: number;
+  postTitle?: string;
+  taskCount?: number;
   runKey: number;
   /** Wall-clock start of this run — survives remounts when returning from background. */
   startedAt: number;
@@ -26,5 +33,5 @@ export interface NotificationToast {
   id: string;
   title: string;
   body: string;
-  tone: "success" | "error";
+  tone: "success" | "error" | "info";
 }

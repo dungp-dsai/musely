@@ -21,8 +21,15 @@ ENV API_SERVER_ENABLED=true \
 COPY apps/agent/016-musely-foreground-gateway /etc/cont-init.d/016-musely-foreground-gateway
 COPY apps/agent/sync-platform-to-volume.sh /opt/musely/platform/sync-platform-to-volume.sh
 COPY musely-agent-platform/ /opt/musely/platform/
+# Interactive `fly ssh` / bash -l resets PATH via /etc/profile and drops Hermes bins.
+# Keep gateway CMD working via image ENV; also restore PATH for ops shells.
 RUN chmod 755 /etc/cont-init.d/016-musely-foreground-gateway \
- && chmod 755 /opt/musely/platform/sync-platform-to-volume.sh
+ && chmod 755 /opt/musely/platform/sync-platform-to-volume.sh \
+ && printf '%s\n' \
+      '# Musely: restore Hermes PATH after /etc/profile wipe (root login shells).' \
+      'export PATH="/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:${PATH}"' \
+      > /etc/profile.d/musely-hermes-path.sh \
+ && chmod 644 /etc/profile.d/musely-hermes-path.sh
 
 # Hermes uses s6-overlay (/init must be PID 1). Fly Machines runs Fly's /init as
 # PID 1 and spawns the image entrypoint as a child — s6 then fails with:
