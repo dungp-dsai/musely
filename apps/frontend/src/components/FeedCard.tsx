@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { shouldShowFeedFeedbackPrompt } from "../lib/feedFeedbackStorage";
 import type { FeedPost } from "../types";
@@ -10,8 +10,9 @@ type Reaction = "up" | "down" | null;
 
 interface Props {
   post: FeedPost;
-  /** Open discuss when navigating from a discussion notification. */
-  forceDiscussOpen?: boolean;
+  /** Bumps when a notification (or other deep-link) asks to open discuss. */
+  discussOpenRequest?: number;
+  onDiscussClosed?: () => void;
 }
 
 function ThumbUpIcon({ active }: { active: boolean }) {
@@ -40,14 +41,27 @@ function CommentIcon() {
   );
 }
 
-export default function FeedCard({ post, forceDiscussOpen }: Props) {
+export default function FeedCard({
+  post,
+  discussOpenRequest = 0,
+  onDiscussClosed,
+}: Props) {
   const [reaction, setReaction] = useState<Reaction>(post.reaction);
-  const [discussOpen, setDiscussOpen] = useState(Boolean(forceDiscussOpen));
+  const [discussOpen, setDiscussOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const lastOpenRequest = useRef(0);
 
   useEffect(() => {
-    if (forceDiscussOpen) setDiscussOpen(true);
-  }, [forceDiscussOpen]);
+    if (discussOpenRequest > 0 && discussOpenRequest !== lastOpenRequest.current) {
+      lastOpenRequest.current = discussOpenRequest;
+      setDiscussOpen(true);
+    }
+  }, [discussOpenRequest]);
+
+  const closeDiscuss = () => {
+    setDiscussOpen(false);
+    onDiscussClosed?.();
+  };
 
   const setReactionRemote = async (next: Reaction) => {
     const prev = reaction;
@@ -152,7 +166,7 @@ export default function FeedCard({ post, forceDiscussOpen }: Props) {
           className={`feed-card-action ${discussOpen ? "active" : ""}`}
           aria-expanded={discussOpen}
           aria-label="Discuss"
-          onClick={() => setDiscussOpen((open) => !open)}
+          onClick={() => setDiscussOpen(true)}
         >
           <CommentIcon />
           <span>Discuss</span>
@@ -160,9 +174,7 @@ export default function FeedCard({ post, forceDiscussOpen }: Props) {
       </footer>
 
       {discussOpen && (
-        <div className="feed-card-discuss">
-          <FeedDiscussPanel post={post} />
-        </div>
+        <FeedDiscussPanel post={post} onClose={closeDiscuss} />
       )}
 
       {feedbackOpen && (

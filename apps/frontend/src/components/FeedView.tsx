@@ -16,14 +16,12 @@ interface Props {
 export default function FeedView({ user, discussPostId, onDiscussPostHandled }: Props) {
   const [items, setItems] = useState<FeedPost[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [openDiscussPostId, setOpenDiscussPostId] = useState<number | null>(
-    discussPostId ?? null
-  );
+  const [openDiscussPostId, setOpenDiscussPostId] = useState<number | null>(null);
+  const [discussOpenNonce, setDiscussOpenNonce] = useState(0);
   const {
     focusedFeedJob,
     runningFeedJob,
     feedRevision,
-    focusedDiscussJob,
     startFeedRefresh,
     cancelFeedJob,
     retryFeedJob,
@@ -61,18 +59,14 @@ export default function FeedView({ user, discussPostId, onDiscussPostHandled }: 
     });
   }, [feedRevision, load]);
 
+  // Explicit deep-link only (notification click). Do not open from persisted
+  // focusedDiscussJob — that auto-popped the modal on every refresh.
   useEffect(() => {
-    if (discussPostId != null) {
-      setOpenDiscussPostId(discussPostId);
-      onDiscussPostHandled?.();
-    }
+    if (discussPostId == null) return;
+    setOpenDiscussPostId(discussPostId);
+    setDiscussOpenNonce((n) => n + 1);
+    onDiscussPostHandled?.();
   }, [discussPostId, onDiscussPostHandled]);
-
-  useEffect(() => {
-    if (focusedDiscussJob?.postId != null) {
-      setOpenDiscussPostId(focusedDiscussJob.postId);
-    }
-  }, [focusedDiscussJob?.id, focusedDiscussJob?.postId]);
 
   useEffect(() => {
     if (openDiscussPostId == null || !items?.length) return;
@@ -80,7 +74,11 @@ export default function FeedView({ user, discussPostId, onDiscussPostHandled }: 
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [openDiscussPostId, items]);
+  }, [openDiscussPostId, discussOpenNonce, items]);
+
+  const closeDiscuss = useCallback(() => {
+    setOpenDiscussPostId(null);
+  }, []);
 
   const firstName = user.name?.split(/\s+/)[0]?.trim();
   const interests = (user.topics?.interests ?? "").trim();
@@ -250,7 +248,12 @@ export default function FeedView({ user, discussPostId, onDiscussPostHandled }: 
           <FeedCard
             key={post.id}
             post={post}
-            forceDiscussOpen={openDiscussPostId === post.id}
+            discussOpenRequest={
+              openDiscussPostId === post.id ? discussOpenNonce : 0
+            }
+            onDiscussClosed={
+              openDiscussPostId === post.id ? closeDiscuss : undefined
+            }
           />
         ))}
       </div>

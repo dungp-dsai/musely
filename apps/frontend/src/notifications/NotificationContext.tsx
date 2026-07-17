@@ -853,7 +853,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       (n) =>
         n.kind === "feed_discuss" &&
         n.focused &&
-        (n.status === "running" || n.status === "error" || n.status === "done")
+        (n.status === "running" || n.status === "error")
     ) ?? null;
 
   const runningDiscussJob =

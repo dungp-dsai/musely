@@ -70,6 +70,8 @@ export default function App() {
     [goToView]
   );
 
+  const clearDiscussPostId = useCallback(() => setDiscussPostId(null), []);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const auth = params.get("auth");
@@ -299,7 +301,7 @@ export default function App() {
           <FeedView
             user={user}
             discussPostId={discussPostId}
-            onDiscussPostHandled={() => setDiscussPostId(null)}
+            onDiscussPostHandled={clearDiscussPostId}
           />
         ) : (
           <div className="app">

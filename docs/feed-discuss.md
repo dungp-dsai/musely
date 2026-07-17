@@ -5,7 +5,7 @@ Inline Facebook-style comments on a feed card. Each user+post pair gets one Herm
 ## Flow
 
 ```
-FeedDiscussPanel → startFeedDiscuss (noti job)
+FeedDiscussPanel (modal) → startFeedDiscuss (noti job)
   → POST /api/feed/posts/:id/discuss { message }
   → warm-check agent (202 → client retries, no DB write yet)
   → save user message (SQLite)
@@ -13,6 +13,8 @@ FeedDiscussPanel → startFeedDiscuss (noti job)
   → SSE tokens → typing bubble
   → onComplete → save assistant message (SQLite) → toast “Your agent replied”
 ```
+
+Discuss opens as a Facebook-style overlay: post preview on top, scrollable comments, sticky composer. Escape / backdrop closes it.
 
 **Key files:** `feed-discuss.js`, discuss routes in `index.js`, `FeedDiscussPanel.tsx`, `startFeedDiscuss` in `NotificationContext.tsx`.
 
