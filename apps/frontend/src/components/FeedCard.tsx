@@ -115,8 +115,8 @@ export default function FeedCard({ post, forceDiscussOpen }: Props) {
         <section className="feed-card-section">
           <h4 className="feed-card-section-label">Sources</h4>
           <ul className="feed-card-sources">
-            {post.sources.map((source) => (
-              <li key={source.url}>
+            {post.sources.map((source, i) => (
+              <li key={`${source.url || source.label}-${i}`}>
                 <a href={source.url} target="_blank" rel="noopener noreferrer">
                   {source.label}
                 </a>

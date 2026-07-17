@@ -101,7 +101,7 @@ function buildPrompt(topics) {
     "- Each item is a news-style reading card (not a writing prompt).",
     "- whats_new: 1-2 sentences on what happened or what's new.",
     "- why_it_matters: 1-2 sentences on why this is relevant to this user.",
-    "- sources: 1-3 real or plausible references with label + url.",
+    "- sources: 2-5 real references with label + url (every source that supports the post; never only one if you used more).",
     "- Set a short 'topic' label on each item derived from the user's interests.",
     "- Return at most 12 posts total."
   );
