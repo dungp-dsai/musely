@@ -126,6 +126,30 @@ CREATE TABLE IF NOT EXISTS feed_user_prefs (
   updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Per-user discussion thread on a feed post (one Hermes session per post).
+CREATE TABLE IF NOT EXISTS feed_discussions (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id             INTEGER NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+  hermes_session_id   TEXT NOT NULL,
+  created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  UNIQUE (user_id, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS feed_discussion_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  discussion_id   INTEGER NOT NULL REFERENCES feed_discussions(id) ON DELETE CASCADE,
+  role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content         TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_feed_discussions_user_post
+  ON feed_discussions(user_id, post_id);
+CREATE INDEX IF NOT EXISTS idx_feed_discussion_messages_disc
+  ON feed_discussion_messages(discussion_id, created_at ASC);
+
 -- Legacy table (pre–feed-posts migration). Kept so existing DBs upgrade cleanly.
 CREATE TABLE IF NOT EXISTS feed_items (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

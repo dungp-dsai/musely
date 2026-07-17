@@ -132,6 +132,33 @@ function migrateFeedPosts() {
   db.prepare("DELETE FROM feed_posts WHERE title = ?").run(
     "Tell us what you're into to personalize your feed"
   );
+
+  ensureFeedDiscussionTables();
+}
+
+function ensureFeedDiscussionTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feed_discussions (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      post_id             INTEGER NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+      hermes_session_id   TEXT NOT NULL,
+      created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      UNIQUE (user_id, post_id)
+    );
+    CREATE TABLE IF NOT EXISTS feed_discussion_messages (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      discussion_id   INTEGER NOT NULL REFERENCES feed_discussions(id) ON DELETE CASCADE,
+      role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content         TEXT NOT NULL DEFAULT '',
+      created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_feed_discussions_user_post
+      ON feed_discussions(user_id, post_id);
+    CREATE INDEX IF NOT EXISTS idx_feed_discussion_messages_disc
+      ON feed_discussion_messages(discussion_id, created_at ASC);
+  `);
 }
 
 function nowIso() {
@@ -874,6 +901,83 @@ export async function addFeedPostFeedback(userId, postId, content) {
     .run(userId, postId, text.slice(0, 4000));
 
   return db.prepare("SELECT * FROM feed_post_feedback WHERE id = ?").get(Number(lastInsertRowid));
+}
+
+function hermesSessionIdForDiscuss(userId, postId) {
+  return `feed-discuss-u${userId}-p${postId}`;
+}
+
+/** Ensure a discussion row exists for this user+post; returns the row. */
+export async function ensureFeedDiscussion(userId, postId) {
+  const post = db
+    .prepare("SELECT id FROM feed_posts WHERE id = ? AND user_id = ?")
+    .get(postId, userId);
+  if (!post) return null;
+
+  const existing = db
+    .prepare("SELECT * FROM feed_discussions WHERE user_id = ? AND post_id = ?")
+    .get(userId, postId);
+  if (existing) return existing;
+
+  const sessionId = hermesSessionIdForDiscuss(userId, postId);
+  const ts = nowIso();
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO feed_discussions (user_id, post_id, hermes_session_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(userId, postId, sessionId, ts, ts);
+  return db.prepare("SELECT * FROM feed_discussions WHERE id = ?").get(Number(lastInsertRowid));
+}
+
+export async function listFeedDiscussionMessages(discussionId) {
+  return db
+    .prepare(
+      `SELECT * FROM feed_discussion_messages
+       WHERE discussion_id = ?
+       ORDER BY created_at ASC, id ASC`
+    )
+    .all(discussionId);
+}
+
+export async function getFeedDiscussionThread(userId, postId) {
+  const discussion = await ensureFeedDiscussion(userId, postId);
+  if (!discussion) return null;
+  const messages = await listFeedDiscussionMessages(discussion.id);
+  return { discussion, messages };
+}
+
+export async function addFeedDiscussionMessage(discussionId, role, content) {
+  if (role !== "user" && role !== "assistant") {
+    throw new Error("role must be user or assistant");
+  }
+  const text = String(content || "").trim();
+  if (!text) throw new Error("content is required");
+
+  const disc = db.prepare("SELECT id FROM feed_discussions WHERE id = ?").get(discussionId);
+  if (!disc) throw new Error(`No discussion with id ${discussionId}`);
+
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO feed_discussion_messages (discussion_id, role, content)
+       VALUES (?, ?, ?)`
+    )
+    .run(discussionId, role, text);
+  db.prepare("UPDATE feed_discussions SET updated_at = ? WHERE id = ?").run(
+    nowIso(),
+    discussionId
+  );
+  return db
+    .prepare("SELECT * FROM feed_discussion_messages WHERE id = ?")
+    .get(Number(lastInsertRowid));
+}
+
+export async function countFeedDiscussionMessages(discussionId) {
+  return (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM feed_discussion_messages WHERE discussion_id = ?")
+      .get(discussionId)?.n ?? 0
+  );
 }
 
 export async function getFeedUserPrefs(userId) {

@@ -34,8 +34,11 @@ import {
   getFeedUserPrefs,
   updateFeedUserPrefs,
   normalizeFeedPostInput,
+  getFeedDiscussionThread,
+  ensureFeedDiscussion,
+  addFeedDiscussionMessage,
 } from "./db.js";
-import { generateTaskChatReply } from "./task-chat.js";
+import { buildTaskDiscussMessages, taskDiscussSessionId } from "./task-chat.js";
 import { generateFeedItems } from "./feed.js";
 import {
   getActivePostPayload,
@@ -48,9 +51,14 @@ import {
 import {
   muselyAgentChatConfigured,
   listMuselyAgentModels,
+  streamMuselyAgentChat,
 } from "./musely-agent-chat.js";
-import { handleMuselyAgentStreamRequest } from "./musely-agent-request.js";
+import {
+  handleMuselyAgentStreamRequest,
+  resolveMuselyAgentTarget,
+} from "./musely-agent-request.js";
 import { buildFeedRefreshMessages } from "./feed-agent.js";
+import { buildFeedDiscussMessages } from "./feed-discuss.js";
 import { muselyAgentApiEnvConfigured } from "./musely-agent-api-env.js";
 import {
   muselyAgentCronConfigured,
@@ -711,27 +719,46 @@ app.get("/api/feedback/:id/thread", requireUser, (req, res) =>
 );
 
 app.post("/api/feedback/:id/chat", requireUser, async (req, res) => {
+  const taskId = Number(req.params.id);
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) return res.status(400).json({ error: "message is required" });
+
+  const thread = await getTaskThread(taskId, req.user.id);
+  if (!thread) return res.status(404).json({ error: "Not found" });
+
+  // Resolve agent BEFORE any writes — 202 warm retries must not duplicate user rows.
+  const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
+  if (warming) return;
+
+  await addAiTaskChatMessage(taskId, "user", message);
+  const fresh = await getTaskThread(taskId, req.user.id);
+  const messages = buildTaskDiscussMessages(fresh, message);
+
+  const controller = new AbortController();
+  const abortUpstream = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abortUpstream);
+  res.on("close", abortUpstream);
+
   try {
-    const taskId = Number(req.params.id);
-    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
-    if (!message) return res.status(400).json({ error: "message is required" });
-
-    const thread = await getTaskThread(taskId, req.user.id);
-    if (!thread) return res.status(404).json({ error: "Not found" });
-
-    const userMsg = await addAiTaskChatMessage(taskId, "user", message);
-    const updatedThread = await getTaskThread(taskId, req.user.id);
-    const reply = await generateTaskChatReply({ thread: updatedThread });
-    const assistantMsg = await addAiTaskChatMessage(taskId, "assistant", reply);
-
-    res.json({
-      user: userMsg,
-      assistant: assistantMsg,
-      thread: await getTaskThread(taskId, req.user.id),
+    await streamMuselyAgentChat({
+      messages,
+      res,
+      signal: controller.signal,
+      target,
+      sessionId: taskDiscussSessionId(req.user.id, taskId),
+      onComplete: async (reply) => {
+        await addAiTaskChatMessage(taskId, "assistant", reply);
+      },
     });
   } catch (err) {
+    if (err.name === "AbortError") return;
     console.error(err);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    req.off("aborted", abortUpstream);
+    res.off("close", abortUpstream);
   }
 });
 
@@ -815,6 +842,65 @@ app.post("/api/feed/posts/:id/feedback", requireUser, (req, res) => {
     if (!row) throw new Error("Not found");
     return row;
   });
+});
+
+app.get("/api/feed/posts/:id/discuss", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const postId = Number(req.params.id);
+    const thread = await getFeedDiscussionThread(req.user.id, postId);
+    if (!thread) throw new Error("Not found");
+    return thread;
+  })
+);
+
+app.post("/api/feed/posts/:id/discuss", requireUser, async (req, res) => {
+  const postId = Number(req.params.id);
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    return res.status(400).json({ error: "message is required" });
+  }
+
+  const post = await getFeedPost(req.user.id, postId);
+  if (!post) return res.status(404).json({ error: "Not found" });
+
+  const discussion = await ensureFeedDiscussion(req.user.id, postId);
+  if (!discussion) return res.status(404).json({ error: "Not found" });
+
+  // Resolve agent BEFORE any writes — a 202 warm retry would otherwise
+  // duplicate the user message and skip first-turn post context.
+  const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
+  if (warming) return;
+
+  await addFeedDiscussionMessage(discussion.id, "user", message);
+
+  const messages = buildFeedDiscussMessages(post, message);
+
+  const controller = new AbortController();
+  const abortUpstream = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abortUpstream);
+  res.on("close", abortUpstream);
+
+  try {
+    await streamMuselyAgentChat({
+      messages,
+      res,
+      signal: controller.signal,
+      target,
+      sessionId: discussion.hermes_session_id,
+      onComplete: async (reply) => {
+        await addFeedDiscussionMessage(discussion.id, "assistant", reply);
+      },
+    });
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    req.off("aborted", abortUpstream);
+    res.off("close", abortUpstream);
+  }
 });
 
 app.get("/api/feed/prefs", requireUser, (req, res) =>

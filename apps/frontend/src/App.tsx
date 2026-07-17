@@ -42,6 +42,7 @@ export default function App() {
   const [landingNotice, setLandingNotice] = useState<string | null>(null);
   const [adminRoute] = useState(isAdminRoute);
   const [cronSeed, setCronSeed] = useState<{ name?: string; prompt?: string } | null>(null);
+  const [discussPostId, setDiscussPostId] = useState<number | null>(null);
 
   const goToView = useCallback(
     (next: View) => {
@@ -60,6 +61,16 @@ export default function App() {
     },
     [goToView]
   );
+
+  const openFeedFromNotification = useCallback(
+    (opts?: { discussPostId?: number }) => {
+      goToView("feed");
+      if (opts?.discussPostId != null) setDiscussPostId(opts.discussPostId);
+    },
+    [goToView]
+  );
+
+  const clearDiscussPostId = useCallback(() => setDiscussPostId(null), []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -207,7 +218,7 @@ export default function App() {
           </main>
         </div>
         <NotificationToastHost
-          onOpenFeed={() => goToView("feed")}
+          onOpenFeed={openFeedFromNotification}
           onOpenWriting={openWriteFromNotification}
         />
       </>
@@ -232,7 +243,7 @@ export default function App() {
           </main>
         </div>
         <NotificationToastHost
-          onOpenFeed={() => goToView("feed")}
+          onOpenFeed={openFeedFromNotification}
           onOpenWriting={openWriteFromNotification}
         />
       </>
@@ -270,7 +281,7 @@ export default function App() {
 
         <div className="home-user">
           <NotificationCenter
-            onOpenFeed={() => goToView("feed")}
+            onOpenFeed={openFeedFromNotification}
             onOpenWriting={openWriteFromNotification}
           />
           <UserMenu
@@ -287,7 +298,11 @@ export default function App() {
 
       <div className="home-body">
         {view === "feed" ? (
-          <FeedView user={user} />
+          <FeedView
+            user={user}
+            discussPostId={discussPostId}
+            onDiscussPostHandled={clearDiscussPostId}
+          />
         ) : (
           <div className="app">
             <Sidebar
@@ -330,7 +345,7 @@ export default function App() {
         )}
       </div>
       <NotificationToastHost
-        onOpenFeed={() => goToView("feed")}
+        onOpenFeed={openFeedFromNotification}
         onOpenWriting={openWriteFromNotification}
       />
     </div>

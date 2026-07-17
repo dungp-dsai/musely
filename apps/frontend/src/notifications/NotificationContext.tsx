@@ -22,6 +22,12 @@ type StartWritingQueueOpts = {
   taskCount: number;
 };
 
+type StartFeedDiscussOpts = {
+  postId: number;
+  postTitle: string;
+  message: string;
+};
+
 type NotificationContextValue = {
   notifications: AppNotification[];
   unreadCount: number;
@@ -29,18 +35,24 @@ type NotificationContextValue = {
   runningFeedJob: AppNotification | null;
   focusedWritingJob: AppNotification | null;
   runningWritingJob: AppNotification | null;
+  focusedDiscussJob: AppNotification | null;
+  runningDiscussJob: AppNotification | null;
   feedRevision: number;
   writingRevision: number;
+  discussRevision: number;
   toast: NotificationToast | null;
   startFeedRefresh: (opts?: StartFeedOpts) => void;
   startWritingQueue: (opts: StartWritingQueueOpts) => void;
+  startFeedDiscuss: (opts: StartFeedDiscussOpts) => void;
   cancelFeedJob: (id: string) => void;
   cancelWritingQueueJob: (id: string) => void;
+  cancelDiscussJob: (id: string) => void;
   retryFeedJob: (id: string) => void;
   retryWritingQueueJob: (id: string) => void;
   backgroundFeedJob: (id: string) => void;
   focusFeedJob: (id: string) => void;
   focusWritingQueueJob: (id: string) => void;
+  focusDiscussJob: (id: string) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
   dismiss: (id: string) => void;
@@ -78,6 +90,12 @@ function interruptedCopy(kind: AppNotification["kind"]) {
     return {
       title: "Queue run interrupted",
       body: "This queue run stopped when the page reloaded.",
+    };
+  }
+  if (kind === "feed_discuss") {
+    return {
+      title: "Discussion interrupted",
+      body: "This discussion reply stopped when the page reloaded.",
     };
   }
   return {
@@ -118,10 +136,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>(loadStoredNotifications);
   const [feedRevision, setFeedRevision] = useState(0);
   const [writingRevision, setWritingRevision] = useState(0);
+  const [discussRevision, setDiscussRevision] = useState(0);
   const [toast, setToast] = useState<NotificationToast | null>(null);
   const abortById = useRef<Map<string, AbortController>>(new Map());
   const feedInFlight = useRef(false);
   const writingInFlight = useRef(false);
+  const discussInFlight = useRef(new Set<number>());
 
   useEffect(() => {
     try {
@@ -508,6 +528,163 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     [runWritingQueueJob]
   );
 
+  const runDiscussJob = useCallback(
+    async (id: string, opts: StartFeedDiscussOpts) => {
+      abortById.current.get(id)?.abort();
+      const controller = new AbortController();
+      abortById.current.set(id, controller);
+      discussInFlight.current.add(opts.postId);
+
+      try {
+        await api.sendFeedDiscuss({
+          postId: opts.postId,
+          message: opts.message,
+          signal: controller.signal,
+          onWarming: () =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                activity: ["Waking your agent"],
+                body: "Waking your agent…",
+                streamingReply: "",
+              })
+            ),
+          onChunk: (_chunk, full) =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                streamingReply: full,
+                body: "Musely agent is typing…",
+                activity: ["Musely agent is typing…"],
+              })
+            ),
+        });
+
+        const when = new Date().toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const titleSnippet =
+          opts.postTitle.trim().length > 42
+            ? `${opts.postTitle.trim().slice(0, 42)}…`
+            : opts.postTitle.trim() || "this story";
+        const title = "Your agent replied";
+        const body = `About “${titleSnippet}” · ${when}`;
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "done",
+            title,
+            body,
+            error: null,
+            focused: false,
+            read: false,
+            activity: [],
+            streamingReply: "",
+          })
+        );
+        setDiscussRevision((v) => v + 1);
+        showToast({ id, title, body, tone: "success" });
+      } catch (e) {
+        const err = e as Error;
+        if (err.name === "AbortError" || /aborted/i.test(err.message)) {
+          setNotifications((prev) =>
+            patchNotification(prev, id, {
+              status: "cancelled",
+              title: "Discussion cancelled",
+              body: "You stopped this reply.",
+              focused: false,
+              read: true,
+              streamingReply: "",
+            })
+          );
+          return;
+        }
+        const message = toUserFacingError(
+          err.message,
+          "Couldn't get a reply from your agent. Please try again."
+        );
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "error",
+            title: "Discussion failed",
+            body: message,
+            error: message,
+            focused: true,
+            read: false,
+            streamingReply: "",
+          })
+        );
+        showToast({
+          id,
+          title: "Discussion failed",
+          body: message,
+          tone: "error",
+        });
+      } finally {
+        abortById.current.delete(id);
+        discussInFlight.current.delete(opts.postId);
+      }
+    },
+    [showToast]
+  );
+
+  const startFeedDiscuss = useCallback(
+    (opts: StartFeedDiscussOpts) => {
+      const message = opts.message.trim();
+      if (!message) return;
+      if (discussInFlight.current.has(opts.postId)) return;
+
+      const id = makeId();
+      const now = Date.now();
+      const titleSnippet =
+        opts.postTitle.trim().length > 36
+          ? `${opts.postTitle.trim().slice(0, 36)}…`
+          : opts.postTitle.trim() || "Feed item";
+      const next: AppNotification = {
+        id,
+        kind: "feed_discuss",
+        title: "Discussing with your agent",
+        body: `About “${titleSnippet}”`,
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+        read: true,
+        focused: true,
+        activity: ["Musely agent is typing…"],
+        postId: opts.postId,
+        postTitle: opts.postTitle,
+        userMessage: message,
+        streamingReply: "",
+        runKey: 0,
+        startedAt: now,
+        error: null,
+      };
+
+      setNotifications((prev) => {
+        const kept = prev.map((n) =>
+          n.kind === "feed_discuss" &&
+          n.status === "running" &&
+          n.postId === opts.postId
+            ? {
+                ...n,
+                status: "cancelled" as const,
+                title: "Discussion cancelled",
+                body: "Superseded by a newer comment.",
+                focused: false,
+                read: true,
+                updatedAt: now,
+                streamingReply: "",
+              }
+            : n.kind === "feed_discuss" && n.postId === opts.postId
+              ? { ...n, focused: false }
+              : n
+        );
+        return [next, ...kept.filter((row) => row.id !== id)].slice(0, MAX_NOTIFICATIONS);
+      });
+
+      void runDiscussJob(id, { ...opts, message });
+    },
+    [runDiscussJob]
+  );
+
   const cancelFeedJob = useCallback((id: string) => {
     abortById.current.get(id)?.abort();
     abortById.current.delete(id);
@@ -537,6 +714,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       })
     );
   }, []);
+
+  const cancelDiscussJob = useCallback((id: string) => {
+    const item = notifications.find((n) => n.id === id);
+    abortById.current.get(id)?.abort();
+    abortById.current.delete(id);
+    if (item?.postId != null) discussInFlight.current.delete(item.postId);
+    setNotifications((prev) =>
+      patchNotification(prev, id, {
+        status: "cancelled",
+        title: "Discussion cancelled",
+        body: "You stopped this reply.",
+        focused: false,
+        read: true,
+        streamingReply: "",
+      })
+    );
+  }, [notifications]);
 
   const retryFeedJob = useCallback(
     (id: string) => {
@@ -594,6 +788,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const focusDiscussJob = useCallback((id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.id === id
+          ? { ...n, focused: true, updatedAt: Date.now() }
+          : n.kind === "feed_discuss" && n.status === "running"
+            ? { ...n, focused: false }
+            : n
+      )
+    );
+  }, []);
+
   const markRead = useCallback((id: string) => {
     setNotifications((prev) => patchNotification(prev, id, { read: true }));
   }, []);
@@ -611,7 +817,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       abortById.current.delete(id);
       const item = notifications.find((n) => n.id === id);
       if (item?.kind === "writing_queue") writingInFlight.current = false;
-      else feedInFlight.current = false;
+      else if (item?.kind === "feed_discuss") {
+        if (item.postId != null) discussInFlight.current.delete(item.postId);
+      } else feedInFlight.current = false;
     }
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     setToast((t) => (t?.id === id ? null : t));
@@ -640,6 +848,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     notifications.find((n) => n.kind === "writing_queue" && n.status === "running") ??
     null;
 
+  const focusedDiscussJob =
+    notifications.find(
+      (n) =>
+        n.kind === "feed_discuss" &&
+        n.focused &&
+        (n.status === "running" || n.status === "error")
+    ) ?? null;
+
+  const runningDiscussJob =
+    notifications.find((n) => n.kind === "feed_discuss" && n.status === "running") ??
+    null;
+
   const unreadCount = notifications.filter(
     (n) => !n.read && (n.status === "done" || n.status === "error")
   ).length;
@@ -652,18 +872,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       runningFeedJob,
       focusedWritingJob,
       runningWritingJob,
+      focusedDiscussJob,
+      runningDiscussJob,
       feedRevision,
       writingRevision,
+      discussRevision,
       toast,
       startFeedRefresh,
       startWritingQueue,
+      startFeedDiscuss,
       cancelFeedJob,
       cancelWritingQueueJob,
+      cancelDiscussJob,
       retryFeedJob,
       retryWritingQueueJob,
       backgroundFeedJob,
       focusFeedJob,
       focusWritingQueueJob,
+      focusDiscussJob,
       markRead,
       markAllRead,
       dismiss,
@@ -676,18 +902,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       runningFeedJob,
       focusedWritingJob,
       runningWritingJob,
+      focusedDiscussJob,
+      runningDiscussJob,
       feedRevision,
       writingRevision,
+      discussRevision,
       toast,
       startFeedRefresh,
       startWritingQueue,
+      startFeedDiscuss,
       cancelFeedJob,
       cancelWritingQueueJob,
+      cancelDiscussJob,
       retryFeedJob,
       retryWritingQueueJob,
       backgroundFeedJob,
       focusFeedJob,
       focusWritingQueueJob,
+      focusDiscussJob,
       markRead,
       markAllRead,
       dismiss,

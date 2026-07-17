@@ -106,6 +106,28 @@ export interface FeedPost {
   reaction: "up" | "down" | null;
 }
 
+export interface FeedDiscussion {
+  id: number;
+  user_id: number;
+  post_id: number;
+  hermes_session_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FeedDiscussionMessage {
+  id: number;
+  discussion_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface FeedDiscussThread {
+  discussion: FeedDiscussion;
+  messages: FeedDiscussionMessage[];
+}
+
 export interface FeedListResponse {
   posts: FeedPost[];
   total: number;

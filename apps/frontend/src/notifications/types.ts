@@ -1,4 +1,4 @@
-export type NotificationKind = "feed_build" | "writing_queue";
+export type NotificationKind = "feed_build" | "writing_queue" | "feed_discuss";
 
 export type NotificationStatus = "running" | "done" | "error" | "cancelled";
 
@@ -14,14 +14,19 @@ export interface AppNotification {
   /**
    * Feed: full-screen building UI.
    * Writing queue: keep queue panel open / highlight progress for this post.
+   * Feed discuss: open discuss panel for this feed post.
    */
   focused: boolean;
   activity: string[];
   topicLabel?: string;
-  /** Writing-queue jobs only. */
+  /** Writing-queue / feed-discuss jobs. */
   postId?: number;
   postTitle?: string;
   taskCount?: number;
+  /** Live assistant draft while a discuss reply streams. */
+  streamingReply?: string;
+  /** Pending user comment for discuss jobs. */
+  userMessage?: string;
   runKey: number;
   /** Wall-clock start of this run — survives remounts when returning from background. */
   startedAt: number;

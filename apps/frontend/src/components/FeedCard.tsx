@@ -1,14 +1,18 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { shouldShowFeedFeedbackPrompt } from "../lib/feedFeedbackStorage";
 import type { FeedPost } from "../types";
 import { relativeTime } from "../utils";
+import FeedDiscussPanel from "./FeedDiscussPanel";
 import FeedFeedbackModal from "./FeedFeedbackModal";
 
 type Reaction = "up" | "down" | null;
 
 interface Props {
   post: FeedPost;
+  /** Bumps when a notification (or other deep-link) asks to open discuss. */
+  discussOpenRequest?: number;
+  onDiscussClosed?: () => void;
 }
 
 function ThumbUpIcon({ active }: { active: boolean }) {
@@ -37,10 +41,27 @@ function CommentIcon() {
   );
 }
 
-export default function FeedCard({ post }: Props) {
+export default function FeedCard({
+  post,
+  discussOpenRequest = 0,
+  onDiscussClosed,
+}: Props) {
   const [reaction, setReaction] = useState<Reaction>(post.reaction);
   const [discussOpen, setDiscussOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const lastOpenRequest = useRef(0);
+
+  useEffect(() => {
+    if (discussOpenRequest > 0 && discussOpenRequest !== lastOpenRequest.current) {
+      lastOpenRequest.current = discussOpenRequest;
+      setDiscussOpen(true);
+    }
+  }, [discussOpenRequest]);
+
+  const closeDiscuss = () => {
+    setDiscussOpen(false);
+    onDiscussClosed?.();
+  };
 
   const setReactionRemote = async (next: Reaction) => {
     const prev = reaction;
@@ -78,7 +99,11 @@ export default function FeedCard({ post }: Props) {
   };
 
   return (
-    <article className="feed-card">
+    <article
+      className="feed-card"
+      id={`feed-post-${post.id}`}
+      data-feed-post-id={post.id}
+    >
       <header className="feed-card-header">
         <div className="feed-card-meta">
           <span className="feed-card-topic">{post.topic}</span>
@@ -104,8 +129,8 @@ export default function FeedCard({ post }: Props) {
         <section className="feed-card-section">
           <h4 className="feed-card-section-label">Sources</h4>
           <ul className="feed-card-sources">
-            {post.sources.map((source) => (
-              <li key={source.url}>
+            {post.sources.map((source, i) => (
+              <li key={`${source.url || source.label}-${i}`}>
                 <a href={source.url} target="_blank" rel="noopener noreferrer">
                   {source.label}
                 </a>
@@ -141,7 +166,7 @@ export default function FeedCard({ post }: Props) {
           className={`feed-card-action ${discussOpen ? "active" : ""}`}
           aria-expanded={discussOpen}
           aria-label="Discuss"
-          onClick={() => setDiscussOpen((open) => !open)}
+          onClick={() => setDiscussOpen(true)}
         >
           <CommentIcon />
           <span>Discuss</span>
@@ -149,11 +174,7 @@ export default function FeedCard({ post }: Props) {
       </footer>
 
       {discussOpen && (
-        <div className="feed-card-discuss">
-          <p className="feed-card-discuss-hint">
-            Discussion with your agent is coming soon — share what you think about this item.
-          </p>
-        </div>
+        <FeedDiscussPanel post={post} onClose={closeDiscuss} />
       )}
 
       {feedbackOpen && (

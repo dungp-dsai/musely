@@ -77,7 +77,8 @@ Each post must have: **title**, **whats_new**, **why_it_matters**, **sources**.
 
 - 10 items each time you run this task
 - Prioritize highest quality
-- Each post should be a real news article
+- Each post is a curated briefing (can synthesize a story), not a single-link dump
+- **sources: include every real URL that supports the post** — usually **2–5**, minimum **2** when more than one source exists. Do not collapse research into one citation.
 - No duplicate stories (vs history or within the batch)
 - Never invent URLs or citations
 
@@ -95,7 +96,11 @@ POST {CLIENT_URL}/api/feed/posts
       "title": "Headline",
       "whats_new": "1–2 sentences.",
       "why_it_matters": "1–2 sentences for this user.",
-      "sources": [{ "label": "Publisher — title", "url": "https://..." }]
+      "sources": [
+        { "label": "Publisher — title", "url": "https://..." },
+        { "label": "Another outlet — related piece", "url": "https://..." },
+        { "label": "Primary doc / paper", "url": "https://..." }
+      ]
     }
   ]
 }

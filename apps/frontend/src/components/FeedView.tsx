@@ -8,11 +8,16 @@ import FeedBuildingScreen from "./FeedBuildingScreen";
 
 interface Props {
   user: User;
+  /** Open discuss for this feed post (from notification deep-link). */
+  discussPostId?: number | null;
+  onDiscussPostHandled?: () => void;
 }
 
-export default function FeedView({ user }: Props) {
+export default function FeedView({ user, discussPostId, onDiscussPostHandled }: Props) {
   const [items, setItems] = useState<FeedPost[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openDiscussPostId, setOpenDiscussPostId] = useState<number | null>(null);
+  const [discussOpenNonce, setDiscussOpenNonce] = useState(0);
   const {
     focusedFeedJob,
     runningFeedJob,
@@ -53,6 +58,27 @@ export default function FeedView({ user }: Props) {
       /* keep current list */
     });
   }, [feedRevision, load]);
+
+  // Explicit deep-link only (notification click). Do not open from persisted
+  // focusedDiscussJob — that auto-popped the modal on every refresh.
+  useEffect(() => {
+    if (discussPostId == null) return;
+    setOpenDiscussPostId(discussPostId);
+    setDiscussOpenNonce((n) => n + 1);
+    onDiscussPostHandled?.();
+  }, [discussPostId, onDiscussPostHandled]);
+
+  useEffect(() => {
+    if (openDiscussPostId == null || !items?.length) return;
+    const el = document.getElementById(`feed-post-${openDiscussPostId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [openDiscussPostId, discussOpenNonce, items]);
+
+  const closeDiscuss = useCallback(() => {
+    setOpenDiscussPostId(null);
+  }, []);
 
   const firstName = user.name?.split(/\s+/)[0]?.trim();
   const interests = (user.topics?.interests ?? "").trim();
@@ -219,7 +245,16 @@ export default function FeedView({ user }: Props) {
           </div>
         </div>
         {items.map((post) => (
-          <FeedCard key={post.id} post={post} />
+          <FeedCard
+            key={post.id}
+            post={post}
+            discussOpenRequest={
+              openDiscussPostId === post.id ? discussOpenNonce : 0
+            }
+            onDiscussClosed={
+              openDiscussPostId === post.id ? closeDiscuss : undefined
+            }
+          />
         ))}
       </div>
     </div>

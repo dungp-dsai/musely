@@ -1,108 +1,70 @@
-// Lightweight LLM helper for task follow-up chat in the Writer UI.
-// Reads API keys from ~/.hermes/.env (OPENROUTER_API_KEY or OPENAI_API_KEY).
+/** Build Hermes chat messages for Write-mode task discussion. */
 
-import { loadMuselyAgentEnv } from "./musely-agent-env.js";
-
-function resolveLlmConfig() {
-  loadMuselyAgentEnv();
-  if (process.env.OPENROUTER_API_KEY) {
-    return {
-      baseUrl: "https://openrouter.ai/api/v1",
-      apiKey: process.env.OPENROUTER_API_KEY,
-      model: process.env.WRITER_CHAT_MODEL || "anthropic/claude-sonnet-4",
-      headers: {
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "writer-app",
-      },
-    };
-  }
-  if (process.env.OPENAI_API_KEY) {
-    return {
-      baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-      apiKey: process.env.OPENAI_API_KEY,
-      model: process.env.WRITER_CHAT_MODEL || "gpt-4o-mini",
-      headers: {},
-    };
-  }
-  return null;
+/**
+ * @param {object} thread - from getTaskThread (task, post, work, report)
+ * @param {string} userMessage
+ */
+export function buildTaskDiscussMessages(thread, userMessage) {
+  const comment = String(userMessage || "").trim();
+  return [
+    { role: "system", content: buildTaskContext(thread) },
+    { role: "user", content: comment },
+  ];
 }
 
-function buildSystemPrompt({ task, postTitle, workResults, report }) {
+function buildTaskContext(thread) {
+  const task = thread?.task || {};
+  const postTitle = thread?.post?.title || "Untitled";
+  const work = Array.isArray(thread?.work) ? thread.work : [];
+  const report = thread?.report;
+
   const parts = [
-    "You are Hermes, the writing assistant for writer-app.",
-    "The user highlighted a passage in their draft and assigned a task. You (or a prior run) may have already researched and stored findings.",
-    "Help the user review your work, answer follow-ups, suggest edits, and explain sources clearly.",
-    "Be concise, precise, and cite URLs when referencing research. Match a thoughtful personal essay tone.",
-    "",
-    `Post: ${postTitle || "Untitled"}`,
-    `Highlighted context: "${task.context || ""}"`,
-    `Task: ${task.content}`,
-    `Status: ${task.status}`,
+    `You are discussing a writing task with the user in Musely Write.`,
+    `Stay grounded in this task, the highlighted draft context, and any stored findings unless they clearly ask about something else.`,
+    ``,
+    `## Post`,
+    postTitle,
+    ``,
+    `## Highlighted context`,
+    `"${task.context || ""}"`,
+    ``,
+    `## Task`,
+    task.content || "(empty)",
+    `Status: ${task.status || "unknown"}`,
   ];
 
-  if (workResults?.length) {
-    parts.push("", "## Your stored findings");
-    for (const w of workResults) {
-      parts.push(w.result);
+  if (work.length) {
+    parts.push("", "## Stored AI findings");
+    work.forEach((w, i) => {
+      parts.push(`### Finding ${i + 1}`);
+      parts.push(String(w.result || "").trim() || "(empty)");
       parts.push("");
-    }
+    });
+  } else {
+    parts.push("", "## Stored AI findings", "(none yet)");
   }
 
   if (report?.summary_action_report) {
-    parts.push("## Your action report for the saved version");
-    parts.push(report.summary_action_report);
+    parts.push("## Action report for saved version");
+    parts.push(String(report.summary_action_report).trim());
   }
+
+  parts.push(
+    "",
+    "Reply helpfully about this task and findings. Cite URLs when referring to research. Keep answers concise unless they ask for depth."
+  );
 
   return parts.join("\n");
 }
 
-export async function generateTaskChatReply({ thread }) {
-  const cfg = resolveLlmConfig();
-  if (!cfg) {
-    throw new Error(
-      "No LLM configured. Set OPENROUTER_API_KEY or OPENAI_API_KEY in ~/.hermes/.env"
-    );
-  }
+/** Stable Hermes session id per user+task. */
+export function taskDiscussSessionId(userId, taskId) {
+  return `task-chat-u${userId}-t${taskId}`;
+}
 
-  const system = buildSystemPrompt({
-    task: thread.task,
-    postTitle: thread.post?.title,
-    workResults: thread.work,
-    report: thread.report,
-  });
-
-  const history = (thread.messages || []).map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
-
-  const messages = [
-    { role: "system", content: system },
-    ...history,
-  ];
-
-  const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${cfg.apiKey}`,
-      "Content-Type": "application/json",
-      ...cfg.headers,
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      temperature: 0.4,
-      max_tokens: 2048,
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`LLM request failed (${res.status}): ${errText.slice(0, 300)}`);
-  }
-
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM returned an empty response");
-  return content.trim();
+// Kept for any callers that still expect the old OpenRouter helper name.
+export async function generateTaskChatReply() {
+  throw new Error(
+    "Task chat now streams via the user's Musely agent (Hermes). Use buildTaskDiscussMessages + streamMuselyAgentChat."
+  );
 }

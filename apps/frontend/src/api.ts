@@ -4,12 +4,12 @@ import type {
   Version,
   Feedback,
   TaskThread,
-  AiTaskChatMessage,
   UserTopics,
   UserPreferences,
   FeedPost,
   FeedListResponse,
   FeedUserPrefs,
+  FeedDiscussThread,
 } from "./types";
 import type { CronJob } from "./lib/cronTypes";
 import { streamMuselyAgentRequest } from "./lib/muselyAgentRequest";
@@ -213,6 +213,32 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
     }).then(json),
+
+  getFeedDiscuss: (postId: number): Promise<FeedDiscussThread> =>
+    apiFetch(`/api/feed/posts/${postId}/discuss`).then(json),
+
+  sendFeedDiscuss: async (opts: {
+    postId: number;
+    message: string;
+    signal?: AbortSignal;
+    onWarming?: () => void;
+    onActivity?: (line: string) => void;
+    onChunk?: (chunk: string, full: string) => void;
+  }): Promise<string> => {
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: `/api/feed/posts/${opts.postId}/discuss`,
+      body: { message: opts.message },
+      signal: opts.signal,
+      onWarming: opts.onWarming,
+      onLine: opts.onActivity,
+      onChunk: opts.onChunk,
+    });
+    if (!text.trim()) {
+      throw new Error("Your agent didn't reply. Please try again.");
+    }
+    return text.trim();
+  },
 
   getFeedPrefs: (): Promise<FeedUserPrefs> => apiFetch("/api/feed/prefs").then(json),
 
@@ -420,15 +446,26 @@ export const api = {
   getTaskThread: (taskId: number): Promise<TaskThread> =>
     apiFetch(`/api/feedback/${taskId}/thread`).then(json),
 
-  sendTaskChat: (
-    taskId: number,
-    message: string
-  ): Promise<{ user: AiTaskChatMessage; assistant: AiTaskChatMessage; thread: TaskThread }> =>
-    apiFetch(`/api/feedback/${taskId}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    }).then(json),
+  sendTaskChat: async (opts: {
+    taskId: number;
+    message: string;
+    signal?: AbortSignal;
+    onWarming?: () => void;
+    onChunk?: (chunk: string, full: string) => void;
+  }): Promise<string> => {
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: `/api/feedback/${opts.taskId}/chat`,
+      body: { message: opts.message },
+      signal: opts.signal,
+      onWarming: opts.onWarming,
+      onChunk: opts.onChunk,
+    });
+    if (!text.trim()) {
+      throw new Error("Your agent didn't reply. Please try again.");
+    }
+    return text.trim();
+  },
 
   getConfig: (): Promise<{
     muselyAgentChatEnabled: boolean;
