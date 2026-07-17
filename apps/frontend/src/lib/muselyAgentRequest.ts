@@ -16,6 +16,8 @@ export type MuselyAgentStreamOptions = {
   onWarming?: () => void;
   /** Called with each complete text line as it streams (progress breadcrumbs). */
   onLine?: (line: string) => void;
+  /** Called with each content chunk and the full accumulated text. */
+  onChunk?: (chunk: string, full: string) => void;
 };
 
 /** POST to a Musely agent stream endpoint; retries on 202 while the instance starts. */
@@ -26,6 +28,7 @@ export async function streamMuselyAgentRequest({
   signal,
   onWarming,
   onLine,
+  onChunk,
 }: MuselyAgentStreamOptions): Promise<string> {
   let warmAttempts = 0;
 
@@ -80,6 +83,7 @@ export async function streamMuselyAgentRequest({
       if (chunk.done) break;
       if (chunk.content) {
         text += chunk.content;
+        onChunk?.(chunk.content, text);
         if (onLine) {
           lineBuffer += chunk.content;
           flushLines();

@@ -34,6 +34,9 @@ import {
   getFeedUserPrefs,
   updateFeedUserPrefs,
   normalizeFeedPostInput,
+  getFeedDiscussionThread,
+  ensureFeedDiscussion,
+  addFeedDiscussionMessage,
 } from "./db.js";
 import { generateTaskChatReply } from "./task-chat.js";
 import { generateFeedItems } from "./feed.js";
@@ -48,9 +51,14 @@ import {
 import {
   muselyAgentChatConfigured,
   listMuselyAgentModels,
+  streamMuselyAgentChat,
 } from "./musely-agent-chat.js";
-import { handleMuselyAgentStreamRequest } from "./musely-agent-request.js";
+import {
+  handleMuselyAgentStreamRequest,
+  resolveMuselyAgentTarget,
+} from "./musely-agent-request.js";
 import { buildFeedRefreshMessages } from "./feed-agent.js";
+import { buildFeedDiscussMessages } from "./feed-discuss.js";
 import { muselyAgentApiEnvConfigured } from "./musely-agent-api-env.js";
 import {
   muselyAgentCronConfigured,
@@ -815,6 +823,65 @@ app.post("/api/feed/posts/:id/feedback", requireUser, (req, res) => {
     if (!row) throw new Error("Not found");
     return row;
   });
+});
+
+app.get("/api/feed/posts/:id/discuss", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const postId = Number(req.params.id);
+    const thread = await getFeedDiscussionThread(req.user.id, postId);
+    if (!thread) throw new Error("Not found");
+    return thread;
+  })
+);
+
+app.post("/api/feed/posts/:id/discuss", requireUser, async (req, res) => {
+  const postId = Number(req.params.id);
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    return res.status(400).json({ error: "message is required" });
+  }
+
+  const post = await getFeedPost(req.user.id, postId);
+  if (!post) return res.status(404).json({ error: "Not found" });
+
+  const discussion = await ensureFeedDiscussion(req.user.id, postId);
+  if (!discussion) return res.status(404).json({ error: "Not found" });
+
+  // Resolve agent BEFORE any writes — a 202 warm retry would otherwise
+  // duplicate the user message and skip first-turn post context.
+  const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
+  if (warming) return;
+
+  await addFeedDiscussionMessage(discussion.id, "user", message);
+
+  const messages = buildFeedDiscussMessages(post, message);
+
+  const controller = new AbortController();
+  const abortUpstream = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abortUpstream);
+  res.on("close", abortUpstream);
+
+  try {
+    await streamMuselyAgentChat({
+      messages,
+      res,
+      signal: controller.signal,
+      target,
+      sessionId: discussion.hermes_session_id,
+      onComplete: async (reply) => {
+        await addFeedDiscussionMessage(discussion.id, "assistant", reply);
+      },
+    });
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    req.off("aborted", abortUpstream);
+    res.off("close", abortUpstream);
+  }
 });
 
 app.get("/api/feed/prefs", requireUser, (req, res) =>

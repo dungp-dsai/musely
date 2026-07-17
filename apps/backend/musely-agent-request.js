@@ -23,8 +23,15 @@ export async function resolveMuselyAgentTarget(userId, res) {
   return { target };
 }
 
-/** Stream a chat completion to `res` (SSE). Caller handles validation. */
-export async function handleMuselyAgentStreamRequest(req, res, { messages, model }) {
+/**
+ * Stream a chat completion to `res` (SSE). Caller handles validation.
+ * @returns {{ assistantText: string, warming?: boolean }}
+ */
+export async function handleMuselyAgentStreamRequest(
+  req,
+  res,
+  { messages, model, sessionId, onComplete }
+) {
   const controller = new AbortController();
   const abortUpstream = () => {
     if (!res.writableEnded) controller.abort();
@@ -34,19 +41,23 @@ export async function handleMuselyAgentStreamRequest(req, res, { messages, model
 
   try {
     const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
-    if (warming) return;
+    if (warming) return { assistantText: "", warming: true };
 
-    await streamMuselyAgentChat({
+    const result = await streamMuselyAgentChat({
       messages,
       model,
       res,
       signal: controller.signal,
       target,
+      sessionId,
+      onComplete,
     });
+    return { assistantText: result?.assistantText || "", warming: false };
   } catch (err) {
-    if (err.name === "AbortError") return;
+    if (err.name === "AbortError") return { assistantText: "", warming: false };
     console.error(err);
     if (!res.headersSent) res.status(500).json({ error: err.message });
+    return { assistantText: "", warming: false };
   } finally {
     req.off("aborted", abortUpstream);
     res.off("close", abortUpstream);

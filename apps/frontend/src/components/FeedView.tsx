@@ -8,15 +8,22 @@ import FeedBuildingScreen from "./FeedBuildingScreen";
 
 interface Props {
   user: User;
+  /** Open discuss for this feed post (from notification deep-link). */
+  discussPostId?: number | null;
+  onDiscussPostHandled?: () => void;
 }
 
-export default function FeedView({ user }: Props) {
+export default function FeedView({ user, discussPostId, onDiscussPostHandled }: Props) {
   const [items, setItems] = useState<FeedPost[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openDiscussPostId, setOpenDiscussPostId] = useState<number | null>(
+    discussPostId ?? null
+  );
   const {
     focusedFeedJob,
     runningFeedJob,
     feedRevision,
+    focusedDiscussJob,
     startFeedRefresh,
     cancelFeedJob,
     retryFeedJob,
@@ -53,6 +60,27 @@ export default function FeedView({ user }: Props) {
       /* keep current list */
     });
   }, [feedRevision, load]);
+
+  useEffect(() => {
+    if (discussPostId != null) {
+      setOpenDiscussPostId(discussPostId);
+      onDiscussPostHandled?.();
+    }
+  }, [discussPostId, onDiscussPostHandled]);
+
+  useEffect(() => {
+    if (focusedDiscussJob?.postId != null) {
+      setOpenDiscussPostId(focusedDiscussJob.postId);
+    }
+  }, [focusedDiscussJob?.id, focusedDiscussJob?.postId]);
+
+  useEffect(() => {
+    if (openDiscussPostId == null || !items?.length) return;
+    const el = document.getElementById(`feed-post-${openDiscussPostId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [openDiscussPostId, items]);
 
   const firstName = user.name?.split(/\s+/)[0]?.trim();
   const interests = (user.topics?.interests ?? "").trim();
@@ -219,7 +247,11 @@ export default function FeedView({ user }: Props) {
           </div>
         </div>
         {items.map((post) => (
-          <FeedCard key={post.id} post={post} />
+          <FeedCard
+            key={post.id}
+            post={post}
+            forceDiscussOpen={openDiscussPostId === post.id}
+          />
         ))}
       </div>
     </div>

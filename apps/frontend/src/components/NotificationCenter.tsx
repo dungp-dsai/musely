@@ -6,7 +6,7 @@ import type { AppNotification } from "../notifications/types";
 import { relativeTime } from "../utils";
 
 type Props = {
-  onOpenFeed?: () => void;
+  onOpenFeed?: (opts?: { discussPostId?: number }) => void;
   onOpenWriting?: (postId?: number) => void;
 };
 
@@ -58,10 +58,14 @@ function NotificationRow({
     item.status === "running"
       ? item.kind === "writing_queue"
         ? computeWritingQueueTimeline(item.activity, elapsed, false)
-        : computeFeedTimeline(item.activity, elapsed, false)
+        : item.kind === "feed_build"
+          ? computeFeedTimeline(item.activity, elapsed, false)
+          : null
       : null;
   const activeLabel =
-    timeline?.steps.find((s) => s.status === "active")?.label ?? null;
+    item.kind === "feed_discuss" && item.status === "running"
+      ? "Musely agent is typing…"
+      : timeline?.steps.find((s) => s.status === "active")?.label ?? null;
 
   return (
     <div
@@ -106,12 +110,16 @@ function NotificationRow({
 function openNotificationDestination(
   item: AppNotification,
   opts: {
-    onOpenFeed?: () => void;
+    onOpenFeed?: (opts?: { discussPostId?: number }) => void;
     onOpenWriting?: (postId?: number) => void;
   }
 ) {
   if (item.kind === "writing_queue") {
     opts.onOpenWriting?.(item.postId);
+    return;
+  }
+  if (item.kind === "feed_discuss") {
+    opts.onOpenFeed?.({ discussPostId: item.postId });
     return;
   }
   opts.onOpenFeed?.();
@@ -125,6 +133,7 @@ export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
     markRead,
     focusFeedJob,
     focusWritingQueueJob,
+    focusDiscussJob,
   } = useNotifications();
 
   useEffect(() => {
@@ -144,9 +153,10 @@ export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
     }
     markRead(item.id);
     openNotificationDestination(item, { onOpenFeed, onOpenWriting });
-    if (item.status === "running" || item.status === "error") {
+    if (item.status === "running" || item.status === "error" || item.kind === "feed_discuss") {
       if (item.kind === "writing_queue") focusWritingQueueJob(item.id);
-      else focusFeedJob(item.id);
+      else if (item.kind === "feed_discuss") focusDiscussJob(item.id);
+      else if (item.status === "running" || item.status === "error") focusFeedJob(item.id);
     }
   };
 
@@ -188,8 +198,10 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
     dismiss,
     focusFeedJob,
     focusWritingQueueJob,
+    focusDiscussJob,
     cancelFeedJob,
     cancelWritingQueueJob,
+    cancelDiscussJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -213,9 +225,12 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
   const handleSelect = (item: AppNotification) => {
     markRead(item.id);
     openNotificationDestination(item, { onOpenFeed, onOpenWriting });
-    if (item.status === "running" || item.status === "error") {
-      if (item.kind === "writing_queue") focusWritingQueueJob(item.id);
-      else focusFeedJob(item.id);
+    if (item.kind === "writing_queue") {
+      if (item.status === "running" || item.status === "error") focusWritingQueueJob(item.id);
+    } else if (item.kind === "feed_discuss") {
+      focusDiscussJob(item.id);
+    } else if (item.status === "running" || item.status === "error") {
+      focusFeedJob(item.id);
     }
     setOpen(false);
   };
@@ -262,8 +277,8 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
             <div className="noti-empty">
               <p className="noti-empty-title">You&apos;re all caught up</p>
               <p className="noti-empty-body">
-                Long-running tasks like building your feed or researching the
-                writing queue will show up here.
+                Long-running tasks like building your feed, researching the
+                writing queue, or discussing a story will show up here.
               </p>
             </div>
           ) : (
@@ -277,6 +292,8 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
                     if (item.status === "running") {
                       if (item.kind === "writing_queue") {
                         cancelWritingQueueJob(item.id);
+                      } else if (item.kind === "feed_discuss") {
+                        cancelDiscussJob(item.id);
                       } else {
                         cancelFeedJob(item.id);
                       }

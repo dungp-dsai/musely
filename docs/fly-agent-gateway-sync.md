@@ -198,3 +198,22 @@ Changing gateway CMD/ENV requires:
 2. Agent image deploy (new machines get correct Dockerfile CMD)
 
 Always verify on **staging** first: machine stays up >30s after start, admin sync returns `synced` without 412, files present under `/opt/data`.
+
+---
+
+## FAQ (Docker vs Fly)
+
+### Why do Docker and Fly both say “Running manually, not as a system service”?
+
+Same Hermes status string. It only means the gateway is **not** a systemd/s6 service unit. It does **not** mean restart is safe on both.
+
+| | Local Docker | Fly |
+|--|--|--|
+| What keeps the box alive | Hermes `/init` (s6) is real container PID 1 | Gateway process (`--no-supervise`) is the Machine’s main job |
+| `hermes gateway restart` | Restarts a **child** → container usually stays up | SIGTERMs the **main** process → **Machine stops** |
+
+### Why can’t we remove `--no-supervise` on Fly?
+
+Fly’s init is already PID 1, so we wrap with `unshare` so Hermes s6 can be PID 1 inside a nested namespace. Under that wrapper, Hermes’s default **supervised** `gateway run` self-handoff fails: machine boots then exits **~1–2s later (143 / SIGTERM)**. Proven on staging (`48ee71eb773638`).
+
+Removing `--no-supervise` to “make restart work” trades a working agent for a machine that won’t stay up. Keep `--no-supervise`; reload config via **cold start** (stop → next ensure), never `hermes gateway restart`.
