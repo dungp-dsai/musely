@@ -38,7 +38,7 @@ import {
   ensureFeedDiscussion,
   addFeedDiscussionMessage,
 } from "./db.js";
-import { generateTaskChatReply } from "./task-chat.js";
+import { buildTaskDiscussMessages, taskDiscussSessionId } from "./task-chat.js";
 import { generateFeedItems } from "./feed.js";
 import {
   getActivePostPayload,
@@ -719,27 +719,46 @@ app.get("/api/feedback/:id/thread", requireUser, (req, res) =>
 );
 
 app.post("/api/feedback/:id/chat", requireUser, async (req, res) => {
+  const taskId = Number(req.params.id);
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) return res.status(400).json({ error: "message is required" });
+
+  const thread = await getTaskThread(taskId, req.user.id);
+  if (!thread) return res.status(404).json({ error: "Not found" });
+
+  // Resolve agent BEFORE any writes — 202 warm retries must not duplicate user rows.
+  const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
+  if (warming) return;
+
+  await addAiTaskChatMessage(taskId, "user", message);
+  const fresh = await getTaskThread(taskId, req.user.id);
+  const messages = buildTaskDiscussMessages(fresh, message);
+
+  const controller = new AbortController();
+  const abortUpstream = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abortUpstream);
+  res.on("close", abortUpstream);
+
   try {
-    const taskId = Number(req.params.id);
-    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
-    if (!message) return res.status(400).json({ error: "message is required" });
-
-    const thread = await getTaskThread(taskId, req.user.id);
-    if (!thread) return res.status(404).json({ error: "Not found" });
-
-    const userMsg = await addAiTaskChatMessage(taskId, "user", message);
-    const updatedThread = await getTaskThread(taskId, req.user.id);
-    const reply = await generateTaskChatReply({ thread: updatedThread });
-    const assistantMsg = await addAiTaskChatMessage(taskId, "assistant", reply);
-
-    res.json({
-      user: userMsg,
-      assistant: assistantMsg,
-      thread: await getTaskThread(taskId, req.user.id),
+    await streamMuselyAgentChat({
+      messages,
+      res,
+      signal: controller.signal,
+      target,
+      sessionId: taskDiscussSessionId(req.user.id, taskId),
+      onComplete: async (reply) => {
+        await addAiTaskChatMessage(taskId, "assistant", reply);
+      },
     });
   } catch (err) {
+    if (err.name === "AbortError") return;
     console.error(err);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    req.off("aborted", abortUpstream);
+    res.off("close", abortUpstream);
   }
 });
 

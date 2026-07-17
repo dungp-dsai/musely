@@ -5876,11 +5876,17 @@ a.wl-signin {
   max-width: 100%;
 }
 
-.feed-discuss-close {
+.feed-discuss-head-actions {
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feed-discuss-close {
   width: 36px;
   height: 36px;
   display: grid;
@@ -5896,6 +5902,36 @@ a.wl-signin {
 .feed-discuss-close:hover {
   background: color-mix(in srgb, var(--bg) 70%, var(--ink));
   color: var(--ink);
+}
+
+.feed-discuss-head-btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.feed-discuss-head-btn:hover {
+  background: color-mix(in srgb, var(--bg) 70%, var(--ink));
+  color: var(--ink);
+}
+
+.feed-discuss-head-btn.done:hover {
+  background: color-mix(in srgb, #2f9e68 16%, #fff);
+  color: #1f7a4d;
+}
+
+.feed-discuss-head-btn.cancel:hover {
+  background: color-mix(in srgb, var(--danger, #c44) 14%, #fff);
+  color: var(--danger, #c44);
 }
 
 .feed-discuss-scroll {
@@ -6003,6 +6039,101 @@ a.wl-signin {
 .feed-discuss-post-sources-more {
   font-size: 12.5px;
   color: var(--muted);
+}
+
+.feed-discuss-task-quote {
+  margin: 0 0 10px;
+  padding: 0;
+  border: none;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.feed-discuss-task-findings {
+  margin-top: 10px;
+}
+
+.feed-discuss-task-findings.prior {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.feed-discuss-findings-body {
+  font-size: 13.5px;
+}
+
+.feed-discuss-findings-body:not(.is-expanded) {
+  -webkit-line-clamp: 5;
+}
+
+.feed-discuss-muted {
+  color: var(--muted);
+}
+
+.feed-discuss-status-pill {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.feed-discuss-status-pill.in_progress {
+  color: var(--ai, #3b6ea8);
+}
+
+.feed-discuss-status-pill.done {
+  color: #1f7a4d;
+}
+
+.feed-discuss-post-meta-muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.feed-discuss-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.feed-discuss-task-action {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.feed-discuss-task-action.done {
+  border-color: color-mix(in srgb, #2f9e68 35%, var(--line));
+  background: color-mix(in srgb, #2f9e68 10%, #fff);
+  color: #1f7a4d;
+}
+
+.feed-discuss-task-action.done:hover {
+  background: color-mix(in srgb, #2f9e68 18%, #fff);
+}
+
+.feed-discuss-task-action.remove {
+  color: var(--muted);
+}
+
+.feed-discuss-task-action.remove:hover {
+  border-color: color-mix(in srgb, var(--danger, #c44) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger, #c44) 8%, #fff);
+  color: var(--danger, #c44);
 }
 
 .feed-discuss-section-label {

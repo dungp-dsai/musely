@@ -4,7 +4,6 @@ import type {
   Version,
   Feedback,
   TaskThread,
-  AiTaskChatMessage,
   UserTopics,
   UserPreferences,
   FeedPost,
@@ -447,15 +446,26 @@ export const api = {
   getTaskThread: (taskId: number): Promise<TaskThread> =>
     apiFetch(`/api/feedback/${taskId}/thread`).then(json),
 
-  sendTaskChat: (
-    taskId: number,
-    message: string
-  ): Promise<{ user: AiTaskChatMessage; assistant: AiTaskChatMessage; thread: TaskThread }> =>
-    apiFetch(`/api/feedback/${taskId}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    }).then(json),
+  sendTaskChat: async (opts: {
+    taskId: number;
+    message: string;
+    signal?: AbortSignal;
+    onWarming?: () => void;
+    onChunk?: (chunk: string, full: string) => void;
+  }): Promise<string> => {
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: `/api/feedback/${opts.taskId}/chat`,
+      body: { message: opts.message },
+      signal: opts.signal,
+      onWarming: opts.onWarming,
+      onChunk: opts.onChunk,
+    });
+    if (!text.trim()) {
+      throw new Error("Your agent didn't reply. Please try again.");
+    }
+    return text.trim();
+  },
 
   getConfig: (): Promise<{
     muselyAgentChatEnabled: boolean;

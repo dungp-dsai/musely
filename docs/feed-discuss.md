@@ -2,10 +2,12 @@
 
 Inline Facebook-style comments on a feed card. Each user+post pair gets one Hermes session; Musely SQLite stores the thread for the UI.
 
+**Shared UI:** Feed and Write task chat both use `DiscussModal` (`apps/frontend/src/components/discuss/`).
+
 ## Flow
 
 ```
-FeedDiscussPanel (modal) → startFeedDiscuss (noti job)
+FeedDiscussPanel (DiscussModal) → startFeedDiscuss (noti job)
   → POST /api/feed/posts/:id/discuss { message }
   → warm-check agent (202 → client retries, no DB write yet)
   → save user message (SQLite)
@@ -16,7 +18,7 @@ FeedDiscussPanel (modal) → startFeedDiscuss (noti job)
 
 Discuss opens as a Facebook-style overlay: post preview on top, scrollable comments, sticky composer. Escape / backdrop closes it.
 
-**Key files:** `feed-discuss.js`, discuss routes in `index.js`, `FeedDiscussPanel.tsx`, `startFeedDiscuss` in `NotificationContext.tsx`.
+Write task chat uses the same modal shell (`TaskChatPanel` → `DiscussModal`). Top box shows **task + highlighted context only**; AI work results and action reports appear in the discussion thread as agent messages. Hermes session id is `task-chat-u{userId}-t{taskId}`; each turn still sends system context with findings for the model (see `buildTaskDiscussMessages` in `task-chat.js`).
 
 ## Persistence (Musely SQLite)
 
@@ -70,6 +72,16 @@ Built by `buildFeedDiscussMessages(post, message)` in `apps/backend/feed-discuss
 
 No custom Hermes skill — free-form chat with post context in the prompt.
 
+### Task chat (Write) Hermes request
+
+Same streaming proxy; different session + system prompt:
+
+| Piece | Value |
+| --- | --- |
+| Header | `X-Hermes-Session-Id: task-chat-u{userId}-t{taskId}` |
+| System | Post title, highlighted context, task, all `ai_task_work` findings, optional action report |
+| Persist | `ai_task_chat` (user + assistant rows) |
+
 ## Warm-up rule
 
 Resolve the agent **before** inserting the user row. Client `streamMuselyAgentRequest` retries on `202`; writing first caused duplicate user bubbles and a “follow-up” turn without context.
@@ -80,3 +92,5 @@ Resolve the agent **before** inserting the user row. Client `streamMuselyAgentRe
 | --- | --- |
 | `GET /api/feed/posts/:id/discuss` | **Load the thread** for the UI. Ensures a `feed_discussions` row exists, returns `{ discussion, messages }` from Musely SQLite (not from Hermes). Used when Discuss opens and when the noti job finishes (`discussRevision`). |
 | `POST /api/feed/posts/:id/discuss` | **Send a comment and stream the agent reply.** Body `{ message }`. Warms agent if needed (`202`), saves the user row, proxies Hermes SSE, then saves the assistant row. Client shows typing from the stream; toast fires when done. |
+| `GET /api/feedback/:id/thread` | **Load Write task thread** — task, post, findings (`work`), report, chat messages. |
+| `POST /api/feedback/:id/chat` | **Discuss a writing task** via Hermes (same SSE pattern as feed discuss). System message includes task context + AI findings. |
