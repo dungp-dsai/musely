@@ -3,6 +3,7 @@ import { useEditor, EditorContent, useEditorState, type Editor as TiptapEditor }
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import SelectionPopup from "./SelectionPopup";
+import SelectionToolbar from "./SelectionToolbar";
 import TaskHoverCard from "./TaskHoverCard";
 import type { Feedback } from "../types";
 import {
@@ -27,8 +28,22 @@ interface Props {
   onOpenTaskChat?: (feedback: Feedback) => void;
 }
 
-type PopupState = { context: string; from: number; to: number; x: number; y: number } | null;
-type HoverState = { feedback: Feedback; x: number; y: number } | null;
+type SelAnchor = { context: string; from: number; to: number; x: number; y: number };
+
+function selectionAnchor(editor: TiptapEditor): SelAnchor | null {
+  const { from, to, empty } = editor.state.selection;
+  if (empty) return null;
+  const text = editor.state.doc.textBetween(from, to, " ").trim();
+  if (!text) return null;
+  const coords = editor.view.coordsAtPos(to);
+  return {
+    context: text,
+    from,
+    to,
+    x: coords.left,
+    y: coords.bottom + 10,
+  };
+}
 
 export default function Editor({
   initialContent,
@@ -45,9 +60,13 @@ export default function Editor({
   onOpenTaskChat,
 }: Props) {
   const editorWrap = useRef<HTMLDivElement>(null);
-  const [popup, setPopup] = useState<PopupState>(null);
-  const [hover, setHover] = useState<HoverState>(null);
+  const [chip, setChip] = useState<SelAnchor | null>(null);
+  const [composer, setComposer] = useState<SelAnchor | null>(null);
+  const [hover, setHover] = useState<{ feedback: Feedback; x: number; y: number } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout>>();
+  const chipTimer = useRef<ReturnType<typeof setTimeout>>();
+  const selecting = useRef(false);
+  const composerOpen = useRef(false);
 
   const highlightItems: TaskHighlightItem[] = useMemo(
     () =>
@@ -75,14 +94,12 @@ export default function Editor({
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
   });
 
-  // Refresh highlight decorations when tasks or focus changes.
   useEffect(() => {
     if (!editor) return;
     setTaskHighlightState(highlightItems, focusedFeedbackId);
     editor.view.dispatch(editor.state.tr.setMeta(TASK_HIGHLIGHT_META, true));
   }, [editor, highlightItems, focusedFeedbackId]);
 
-  // Scroll to and pulse the focused highlight.
   useEffect(() => {
     if (!focusedFeedbackId) return;
     const el = editorWrap.current?.querySelector(
@@ -105,7 +122,6 @@ export default function Editor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncKey, editor]);
 
-  // Hover → task preview. Click → full chat panel.
   useEffect(() => {
     const root = editorWrap.current?.querySelector(".ProseMirror");
     if (!root || chatOpen) return;
@@ -149,43 +165,141 @@ export default function Editor({
     if (chatOpen) setHover(null);
   }, [chatOpen]);
 
-  const openPopupForSelection = useCallback(() => {
-    if (!editor || !onQueueTask) return;
-    const { from, to, empty } = editor.state.selection;
-    if (empty) return;
-    const text = editor.state.doc.textBetween(from, to, " ").trim();
-    if (!text) return;
+  useEffect(() => {
+    composerOpen.current = Boolean(composer);
+  }, [composer]);
 
-    const coords = editor.view.coordsAtPos(to);
-    const wrap = editorWrap.current?.getBoundingClientRect();
-    const x = wrap ? coords.left - wrap.left : coords.left;
-    const y = wrap ? coords.bottom - wrap.top + 8 : coords.bottom + 8;
-    setPopup({ context: text, from, to, x, y });
+  const clearSelectionUi = useCallback(() => {
+    clearTimeout(chipTimer.current);
+    setChip(null);
+    setComposer(null);
+  }, []);
+
+  const scheduleChip = useCallback(() => {
+    if (!editor || !onQueueTask || composerOpen.current) return;
+    clearTimeout(chipTimer.current);
+    const anchor = selectionAnchor(editor);
+    if (!anchor) {
+      setChip(null);
+      return;
+    }
+    // Brief pause so drag-select / delete / copy aren't interrupted.
+    chipTimer.current = setTimeout(() => {
+      if (selecting.current || composerOpen.current) return;
+      const next = selectionAnchor(editor);
+      if (next) setChip(next);
+      else setChip(null);
+    }, 280);
   }, [editor, onQueueTask]);
 
+  const openComposer = useCallback(
+    (anchor?: SelAnchor | null) => {
+      if (!editor || !onQueueTask) return;
+      const next = anchor ?? selectionAnchor(editor);
+      if (!next) return;
+      clearTimeout(chipTimer.current);
+      setChip(null);
+      setComposer(next);
+    },
+    [editor, onQueueTask]
+  );
+
+  // Selection lifecycle: chip only (never auto-open the full form).
+  useEffect(() => {
+    if (!editor || !onQueueTask) return;
+
+    const onSelectionUpdate = () => {
+      if (selecting.current) {
+        setChip(null);
+        return;
+      }
+      if (composerOpen.current) return;
+      const { empty } = editor.state.selection;
+      if (empty) {
+        clearTimeout(chipTimer.current);
+        setChip(null);
+        return;
+      }
+      scheduleChip();
+    };
+
+    editor.on("selectionUpdate", onSelectionUpdate);
+    return () => {
+      editor.off("selectionUpdate", onSelectionUpdate);
+      clearTimeout(chipTimer.current);
+    };
+  }, [editor, onQueueTask, scheduleChip]);
+
+  // ⌘/Ctrl+K opens the composer for the current selection.
+  useEffect(() => {
+    if (!editor || !onQueueTask) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("textarea, input, .sel-popup")) return;
+      if (!editor.isFocused && !editorWrap.current?.contains(document.activeElement)) return;
+      const anchor = selectionAnchor(editor);
+      if (!anchor) return;
+      e.preventDefault();
+      openComposer(anchor);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editor, onQueueTask, openComposer]);
+
+  const handleMouseDown = () => {
+    selecting.current = true;
+    clearTimeout(chipTimer.current);
+    if (!composerOpen.current) setChip(null);
+  };
+
   const handleMouseUp = () => {
-    setTimeout(openPopupForSelection, 10);
+    selecting.current = false;
+    if (!composerOpen.current) scheduleChip();
   };
 
   const submitTask = (task: string) => {
-    if (popup && onQueueTask) onQueueTask(popup.context, task, popup.from, popup.to);
-    setPopup(null);
+    if (composer && onQueueTask) {
+      onQueueTask(composer.context, task, composer.from, composer.to);
+    }
+    clearSelectionUi();
     editor?.commands.focus();
   };
 
   return (
     <div className="doc-shell" ref={editorWrap}>
-      {editor && <Toolbar editor={editor} />}
-      <div className="doc-editor" onMouseUp={handleMouseUp}>
+      {editor && (
+        <Toolbar
+          editor={editor}
+          canQueue={Boolean(onQueueTask)}
+          onAddTask={() => openComposer()}
+        />
+      )}
+      <div
+        className="doc-editor"
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+      >
         <EditorContent editor={editor} />
       </div>
-      {popup && (
+      {chip && !composer && (
+        <SelectionToolbar
+          x={chip.x}
+          y={chip.y}
+          onAddTask={() => openComposer(chip)}
+          onDismiss={() => setChip(null)}
+        />
+      )}
+      {composer && (
         <SelectionPopup
-          context={popup.context}
-          x={popup.x}
-          y={popup.y}
+          context={composer.context}
+          x={composer.x}
+          y={composer.y}
           onSubmit={submitTask}
-          onClose={() => setPopup(null)}
+          onClose={() => {
+            setComposer(null);
+            editor?.commands.focus();
+          }}
         />
       )}
       {hover && !chatOpen && <TaskHoverCard feedback={hover.feedback} x={hover.x} y={hover.y} />}
@@ -193,7 +307,15 @@ export default function Editor({
   );
 }
 
-function Toolbar({ editor }: { editor: TiptapEditor }) {
+function Toolbar({
+  editor,
+  canQueue,
+  onAddTask,
+}: {
+  editor: TiptapEditor;
+  canQueue?: boolean;
+  onAddTask?: () => void;
+}) {
   const s = useEditorState({
     editor,
     selector: ({ editor }) => ({
@@ -209,6 +331,7 @@ function Toolbar({ editor }: { editor: TiptapEditor }) {
       quote: editor?.isActive("blockquote") ?? false,
       canUndo: editor?.can().chain().undo().run() ?? false,
       canRedo: editor?.can().chain().redo().run() ?? false,
+      hasSelection: editor ? !editor.state.selection.empty : false,
     }),
   });
 
@@ -255,6 +378,19 @@ function Toolbar({ editor }: { editor: TiptapEditor }) {
       <button className={`tb-btn ${s.quote ? "on" : ""}`} title="Quote" onClick={() => chain().toggleBlockquote().run()}>
         ❝
       </button>
+      {canQueue && onAddTask ? (
+        <>
+          <span className="tb-sep" />
+          <button
+            className="tb-btn tb-ai"
+            title="Add AI task (⌘K)"
+            disabled={!s.hasSelection}
+            onClick={onAddTask}
+          >
+            ✦ Task
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }

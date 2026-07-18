@@ -8,6 +8,7 @@ interface Props {
   onClose: () => void;
 }
 
+/** Full task composer — only opened after an intentional action (chip / ⌘K). */
 export default function SelectionPopup({ context, x, y, onSubmit, onClose }: Props) {
   const [task, setTask] = useState("");
   const ref = useRef<HTMLDivElement>(null);
@@ -37,23 +38,22 @@ export default function SelectionPopup({ context, x, y, onSubmit, onClose }: Pro
     onSubmit(task.trim());
   };
 
-  // Keep popup on screen.
-  const left = Math.min(x, window.innerWidth - 320);
-  const top = Math.min(y, window.innerHeight - 220);
+  const left = Math.min(Math.max(12, x), window.innerWidth - 320);
+  const top = Math.min(Math.max(12, y), window.innerHeight - 240);
 
   return (
     <div className="sel-popup" ref={ref} style={{ left, top }}>
       <div className="sel-field">
-        <span className="sel-label">Context</span>
-        <div className="sel-context">"{context}"</div>
+        <span className="sel-label">Selected text</span>
+        <div className="sel-context">“{context}”</div>
       </div>
       <div className="sel-field">
-        <span className="sel-label">Task</span>
+        <span className="sel-label">Task for Musely</span>
         <textarea
           ref={inputRef}
           className="input textarea sel-task"
           rows={2}
-          placeholder="What should Hermes do with this?"
+          placeholder="What should Musely do with this?"
           value={task}
           onChange={(e) => setTask(e.target.value)}
           onKeyDown={(e) => {

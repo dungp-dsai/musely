@@ -687,10 +687,72 @@ button {
   position: relative;
 }
 
-/* ---------- Selection popup (highlight → task) ---------- */
+/* ---------- Selection toolbar + task composer ---------- */
+.sel-toolbar {
+  position: fixed;
+  z-index: 55;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    0 12px 28px rgba(0, 0, 0, 0.12);
+  animation: sel-toolbar-in 0.16s ease-out;
+}
+
+@keyframes sel-toolbar-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.sel-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.15s;
+}
+
+.sel-toolbar-btn:hover {
+  background: color-mix(in srgb, var(--accent) 18%, #fff);
+  transform: translateY(-0.5px);
+}
+
+.sel-toolbar-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.sel-toolbar-hint {
+  padding: 0 10px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
 .sel-popup {
-  position: absolute;
-  z-index: 50;
+  position: fixed;
+  z-index: 56;
   width: 300px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -700,6 +762,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  animation: sel-toolbar-in 0.16s ease-out;
 }
 
 .sel-field {
@@ -731,6 +794,15 @@ button {
 .sel-task {
   font-size: 13px;
   resize: none;
+}
+
+.doc-toolbar .tb-ai {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.doc-toolbar .tb-ai:disabled {
+  opacity: 0.4;
 }
 
 /* ---------- Queue FAB + panel ---------- */
