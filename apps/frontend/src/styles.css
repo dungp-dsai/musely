@@ -6781,7 +6781,59 @@ a.wl-signin {
   color: var(--muted);
 }
 
-/* Open WebUI–style tool progress cards */
+/* Cursor-style collapsible process summary */
+.agent-explored {
+  margin: 0 0 10px;
+}
+
+.agent-explored-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 2px 0;
+  margin: 0 0 2px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  letter-spacing: -0.01em;
+}
+
+.agent-explored-toggle:hover {
+  color: var(--ink);
+}
+
+.agent-explored-chevron {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.85;
+  transition: transform 0.12s ease;
+}
+
+.agent-explored.is-open .agent-explored-chevron {
+  /* already swaps glyph */
+}
+
+.agent-explored-body {
+  margin-top: 8px;
+}
+
+.agent-explored-body .agent-tools {
+  margin-bottom: 4px;
+}
+
+.agent-explored-body .agent-tool.is-running {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, var(--bg));
+}
+
+.agent-explored-body .agent-tool.is-running .agent-tool-status {
+  color: var(--muted);
+}
+
 .agent-tools {
   display: flex;
   flex-direction: column;

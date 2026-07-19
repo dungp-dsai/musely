@@ -95,9 +95,66 @@ function extractDeltaContent(payload) {
   }
 }
 
+function extractToolProgress(payload) {
+  try {
+    const parsed = JSON.parse(payload);
+    const tool =
+      (typeof parsed.tool === "string" && parsed.tool) ||
+      (typeof parsed.name === "string" && parsed.name) ||
+      "";
+    if (!tool) return null;
+    const statusRaw = typeof parsed.status === "string" ? parsed.status : "running";
+    const status =
+      statusRaw === "completed" || statusRaw === "done" || statusRaw === "complete"
+        ? "completed"
+        : "running";
+    return {
+      id:
+        (typeof parsed.toolCallId === "string" && parsed.toolCallId) ||
+        (typeof parsed.tool_call_id === "string" && parsed.tool_call_id) ||
+        (typeof parsed.id === "string" && parsed.id) ||
+        undefined,
+      tool,
+      emoji: typeof parsed.emoji === "string" ? parsed.emoji : undefined,
+      label:
+        (typeof parsed.label === "string" && parsed.label) ||
+        (typeof parsed.preview === "string" && parsed.preview) ||
+        undefined,
+      status,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function upsertToolEvent(list, progress) {
+  if (!progress?.tool) return list;
+  const id =
+    progress.id ||
+    `${progress.tool}:${progress.label || ""}:${list.filter((t) => t.tool === progress.tool).length}`;
+  const idx = list.findIndex(
+    (t) =>
+      (progress.id && t.id === progress.id) ||
+      (t.status === "running" && t.tool === progress.tool && !progress.id)
+  );
+  const next = {
+    id: idx >= 0 ? list[idx].id : id,
+    tool: progress.tool,
+    emoji: progress.emoji || (idx >= 0 ? list[idx].emoji : undefined),
+    label: progress.label || (idx >= 0 ? list[idx].label : undefined),
+    status: progress.status === "completed" ? "completed" : "running",
+  };
+  if (idx >= 0) {
+    const copy = list.slice();
+    copy[idx] = next;
+    return copy;
+  }
+  return [...list, next];
+}
+
 /**
  * Stream Hermes chat completions to `res`.
- * @returns {{ assistantText: string }}
+ * @returns {{ assistantText: string, toolEvents: object[] }}
  */
 export async function streamMuselyAgentChat({
   messages,
@@ -113,7 +170,7 @@ export async function streamMuselyAgentChat({
     res.status(503).json({
       error: "Musely agent API not configured (set API_SERVER_KEY in ~/.hermes/.env or HERMES_API_SERVER_KEY)",
     });
-    return { assistantText: "" };
+    return { assistantText: "", toolEvents: [] };
   }
 
   const resolvedModel = await resolveMuselyAgentModel(target, model);
@@ -130,7 +187,7 @@ export async function streamMuselyAgentChat({
   if (!upstream.ok) {
     const text = await upstream.text();
     res.status(upstream.status).json({ error: text || `Hermes chat failed: ${upstream.status}` });
-    return { assistantText: "" };
+    return { assistantText: "", toolEvents: [] };
   }
 
   res.status(200);
@@ -144,6 +201,8 @@ export async function streamMuselyAgentChat({
   const decoder = new TextDecoder();
   let lineBuf = "";
   let assistantText = "";
+  let eventName = "message";
+  let toolEvents = [];
 
   try {
     while (true) {
@@ -159,31 +218,53 @@ export async function streamMuselyAgentChat({
       const lines = lineBuf.split("\n");
       lineBuf = lines.pop() || "";
       for (const line of lines) {
-        const trimmed = line.trim();
+        const trimmed = line.trimEnd();
+        if (!trimmed) {
+          eventName = "message";
+          continue;
+        }
+        if (trimmed.startsWith("event:")) {
+          eventName = trimmed.slice(6).trim() || "message";
+          continue;
+        }
         if (!trimmed.startsWith("data:")) continue;
         const payload = trimmed.slice(5).trim();
+        if (!payload) continue;
+
+        if (eventName === "hermes.tool.progress") {
+          const progress = extractToolProgress(payload);
+          if (progress) toolEvents = upsertToolEvent(toolEvents, progress);
+          continue;
+        }
+        if (eventName !== "message") continue;
+
         const { content, error } = extractDeltaContent(payload);
         if (error) break;
         if (content) assistantText += content;
       }
     }
   } catch (err) {
-    if (err.name === "AbortError") return { assistantText };
+    if (err.name === "AbortError") return { assistantText, toolEvents };
     console.error(err);
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
     }
   }
 
+  // Mark any still-running tools complete when the turn ends.
+  toolEvents = toolEvents.map((t) =>
+    t.status === "running" ? { ...t, status: "completed" } : t
+  );
+
   // Persist before ending the SSE so clients that reload on stream-close see the reply.
   if (typeof onComplete === "function" && assistantText.trim()) {
     try {
-      await onComplete(assistantText.trim());
+      await onComplete(assistantText.trim(), toolEvents);
     } catch (err) {
       console.error("[musely-agent-chat] onComplete failed:", err.message);
     }
   }
 
   if (!res.writableEnded) res.end();
-  return { assistantText };
+  return { assistantText, toolEvents };
 }

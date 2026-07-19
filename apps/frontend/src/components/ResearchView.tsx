@@ -4,6 +4,7 @@ import type { AgentToolEvent } from "../lib/agentToolEvents";
 import { useNotifications } from "../notifications/NotificationContext";
 import type { ResearchMessage, ResearchSession } from "../types";
 import { relativeTime, researchTitleFromQuery } from "../utils";
+import AgentExploredSummary from "./AgentExploredSummary";
 import AgentToolProgressList from "./AgentToolProgressList";
 import { renderDiscussMarkdown } from "./discuss/DiscussPrimitives";
 
@@ -364,6 +365,9 @@ export default function ResearchView({
                     <div className="research-msg-name">
                       {m.role === "user" ? "You" : "Musely Agent"}
                     </div>
+                    {m.role === "assistant" && m.tool_events && m.tool_events.length > 0 ? (
+                      <AgentExploredSummary tools={m.tool_events} />
+                    ) : null}
                     <div className="research-msg-text">{renderDiscussMarkdown(m.content)}</div>
                   </div>
                 </div>

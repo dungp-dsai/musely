@@ -974,8 +974,8 @@ app.post("/api/research/sessions/:id/chat", requireUser, async (req, res) => {
       signal: controller.signal,
       target,
       sessionId: thread.session.hermes_session_id,
-      onComplete: async (reply) => {
-        await addResearchMessage(sessionId, "assistant", reply);
+      onComplete: async (reply, toolEvents) => {
+        await addResearchMessage(sessionId, "assistant", reply, toolEvents);
       },
     });
   } catch (err) {
