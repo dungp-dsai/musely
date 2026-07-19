@@ -264,6 +264,7 @@ export const api = {
     signal?: AbortSignal;
     onWarming?: () => void;
     onChunk?: (chunk: string, full: string) => void;
+    onToolProgress?: (tool: import("./lib/muselyAgentStream").AgentToolProgress) => void;
   }): Promise<string> => {
     const text = await streamMuselyAgentRequest({
       apiBase: API_BASE,
@@ -272,6 +273,7 @@ export const api = {
       signal: opts.signal,
       onWarming: opts.onWarming,
       onChunk: opts.onChunk,
+      onToolProgress: opts.onToolProgress,
     });
     if (!text.trim()) {
       throw new Error("Your agent didn't reply. Please try again.");

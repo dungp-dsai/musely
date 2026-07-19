@@ -1,6 +1,18 @@
-export type NotificationKind = "feed_build" | "writing_queue" | "feed_discuss";
+export type NotificationKind =
+  | "feed_build"
+  | "writing_queue"
+  | "feed_discuss"
+  | "research_chat";
 
 export type NotificationStatus = "running" | "done" | "error" | "cancelled";
+
+export interface AgentToolEventNotification {
+  id: string;
+  tool: string;
+  emoji?: string;
+  label?: string;
+  status: "running" | "completed";
+}
 
 export interface AppNotification {
   id: string;
@@ -15,6 +27,7 @@ export interface AppNotification {
    * Feed: full-screen building UI.
    * Writing queue: keep queue panel open / highlight progress for this post.
    * Feed discuss: open discuss panel for this feed post.
+   * Research: open research session.
    */
   focused: boolean;
   activity: string[];
@@ -23,9 +36,14 @@ export interface AppNotification {
   postId?: number;
   postTitle?: string;
   taskCount?: number;
-  /** Live assistant draft while a discuss reply streams. */
+  /** Research chat session. */
+  sessionId?: number;
+  sessionTitle?: string;
+  /** Live tool progress (Hermes hermes.tool.progress). */
+  toolEvents?: AgentToolEventNotification[];
+  /** Live assistant draft while a discuss/research reply streams. */
   streamingReply?: string;
-  /** Pending user comment for discuss jobs. */
+  /** Pending user comment for discuss/research jobs. */
   userMessage?: string;
   runKey: number;
   /** Wall-clock start of this run — survives remounts when returning from background. */

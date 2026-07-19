@@ -1,4 +1,4 @@
-import { parseOpenAIStream } from "./muselyAgentStream";
+import { parseOpenAIStream, type AgentToolProgress } from "./muselyAgentStream";
 import {
   AGENT_START_TIMEOUT,
   AGENT_TASK_INCOMPLETE,
@@ -18,6 +18,8 @@ export type MuselyAgentStreamOptions = {
   onLine?: (line: string) => void;
   /** Called with each content chunk and the full accumulated text. */
   onChunk?: (chunk: string, full: string) => void;
+  /** Hermes `hermes.tool.progress` events (tool start / complete). */
+  onToolProgress?: (tool: AgentToolProgress) => void;
 };
 
 /** POST to a Musely agent stream endpoint; retries on 202 while the instance starts. */
@@ -29,6 +31,7 @@ export async function streamMuselyAgentRequest({
   onWarming,
   onLine,
   onChunk,
+  onToolProgress,
 }: MuselyAgentStreamOptions): Promise<string> {
   let warmAttempts = 0;
 
@@ -81,6 +84,10 @@ export async function streamMuselyAgentRequest({
     for await (const chunk of parseOpenAIStream(res.body)) {
       if (chunk.error) throw new Error(toUserFacingError(chunk.error, AGENT_TASK_INCOMPLETE));
       if (chunk.done) break;
+      if (chunk.tool) {
+        onToolProgress?.(chunk.tool);
+        continue;
+      }
       if (chunk.content) {
         text += chunk.content;
         onChunk?.(chunk.content, text);

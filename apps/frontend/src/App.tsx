@@ -45,6 +45,7 @@ export default function App() {
   const [adminRoute] = useState(isAdminRoute);
   const [cronSeed, setCronSeed] = useState<{ name?: string; prompt?: string } | null>(null);
   const [discussPostId, setDiscussPostId] = useState<number | null>(null);
+  const [researchSessionId, setResearchSessionId] = useState<number | null>(null);
 
   const goToView = useCallback(
     (next: View) => {
@@ -72,7 +73,16 @@ export default function App() {
     [goToView]
   );
 
+  const openResearchFromNotification = useCallback(
+    (opts?: { sessionId?: number }) => {
+      goToView("research");
+      if (opts?.sessionId != null) setResearchSessionId(opts.sessionId);
+    },
+    [goToView]
+  );
+
   const clearDiscussPostId = useCallback(() => setDiscussPostId(null), []);
+  const clearResearchSessionId = useCallback(() => setResearchSessionId(null), []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -222,6 +232,7 @@ export default function App() {
         <NotificationToastHost
           onOpenFeed={openFeedFromNotification}
           onOpenWriting={openWriteFromNotification}
+          onOpenResearch={openResearchFromNotification}
         />
       </>
     );
@@ -247,6 +258,7 @@ export default function App() {
         <NotificationToastHost
           onOpenFeed={openFeedFromNotification}
           onOpenWriting={openWriteFromNotification}
+          onOpenResearch={openResearchFromNotification}
         />
       </>
     );
@@ -264,6 +276,7 @@ export default function App() {
           <NotificationCenter
             onOpenFeed={openFeedFromNotification}
             onOpenWriting={openWriteFromNotification}
+            onOpenResearch={openResearchFromNotification}
           />
           <UserMenu
             user={user}
@@ -285,7 +298,11 @@ export default function App() {
             onDiscussPostHandled={clearDiscussPostId}
           />
         ) : view === "research" ? (
-          <ResearchView user={user} />
+          <ResearchView
+            user={user}
+            focusSessionId={researchSessionId}
+            onFocusSessionHandled={clearResearchSessionId}
+          />
         ) : (
           <div className="app">
             <Sidebar
@@ -330,6 +347,7 @@ export default function App() {
       <NotificationToastHost
         onOpenFeed={openFeedFromNotification}
         onOpenWriting={openWriteFromNotification}
+        onOpenResearch={openResearchFromNotification}
       />
     </div>
   );
