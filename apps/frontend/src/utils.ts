@@ -42,3 +42,27 @@ export function htmlToText(html: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+/** Sidebar title from a research query — strip chat fluff, keep the subject. */
+export function researchTitleFromQuery(raw: string, maxLen = 42): string {
+  let t = String(raw || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!t) return "New research";
+
+  t = t
+    .replace(/^(hey|hi|hello|yo|hiya)[,!.\s]+/i, "")
+    .replace(/^(please|pls)[,!\s]+/i, "")
+    .replace(/^(can you|could you|would you|will you)\s+/i, "")
+    .replace(/^(tell me|explain|research|find(?:\s+out)?|look\s+up|help me)\s+/i, "")
+    .replace(/^(about|on|regarding)\s+/i, "")
+    .trim();
+
+  if (!t) t = String(raw).trim().replace(/\s+/g, " ");
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+
+  if (t.length <= maxLen) return t;
+  const cut = t.slice(0, maxLen);
+  const atWord = cut.replace(/\s+\S*$/, "");
+  return `${(atWord.length >= 18 ? atWord : cut).trimEnd()}…`;
+}

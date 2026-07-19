@@ -134,6 +134,7 @@ function migrateFeedPosts() {
   );
 
   ensureFeedDiscussionTables();
+  ensureResearchTables();
 }
 
 function ensureFeedDiscussionTables() {
@@ -158,6 +159,30 @@ function ensureFeedDiscussionTables() {
       ON feed_discussions(user_id, post_id);
     CREATE INDEX IF NOT EXISTS idx_feed_discussion_messages_disc
       ON feed_discussion_messages(discussion_id, created_at ASC);
+  `);
+}
+
+function ensureResearchTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS research_sessions (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title               TEXT NOT NULL DEFAULT 'New research',
+      hermes_session_id   TEXT NOT NULL,
+      created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS research_messages (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id      INTEGER NOT NULL REFERENCES research_sessions(id) ON DELETE CASCADE,
+      role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content         TEXT NOT NULL DEFAULT '',
+      created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_research_sessions_user
+      ON research_sessions(user_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_research_messages_session
+      ON research_messages(session_id, created_at ASC, id ASC);
   `);
 }
 
@@ -1010,6 +1035,156 @@ export async function countFeedItems(userId) {
 
 export async function clearFeedItems(userId) {
   return clearFeedPosts(userId);
+}
+
+// ---------- Research sessions ----------
+
+function hermesSessionIdForResearch(userId, sessionId) {
+  return `research-u${userId}-s${sessionId}`;
+}
+
+/** Sidebar title from a research query — strip chat fluff, keep the subject. */
+function researchTitleFromQuery(raw, maxLen = 42) {
+  let t = String(raw || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!t) return "New research";
+
+  t = t
+    .replace(/^(hey|hi|hello|yo|hiya)[,!.\s]+/i, "")
+    .replace(/^(please|pls)[,!\s]+/i, "")
+    .replace(/^(can you|could you|would you|will you)\s+/i, "")
+    .replace(/^(tell me|explain|research|find(?:\s+out)?|look\s+up|help me)\s+/i, "")
+    .replace(/^(about|on|regarding)\s+/i, "")
+    .trim();
+
+  if (!t) t = String(raw).trim().replace(/\s+/g, " ");
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+
+  if (t.length <= maxLen) return t;
+  const cut = t.slice(0, maxLen);
+  const atWord = cut.replace(/\s+\S*$/, "");
+  return `${(atWord.length >= 18 ? atWord : cut).trimEnd()}…`;
+}
+
+function serializeResearchSession(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    title: row.title || "New research",
+    hermes_session_id: row.hermes_session_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function serializeResearchMessage(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    session_id: row.session_id,
+    role: row.role,
+    content: row.content,
+    created_at: row.created_at,
+  };
+}
+
+export async function listResearchSessions(userId, { limit = 40 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 40, 1), 100);
+  return db
+    .prepare(
+      `SELECT * FROM research_sessions
+       WHERE user_id = ?
+       ORDER BY updated_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(userId, safeLimit)
+    .map(serializeResearchSession);
+}
+
+export async function createResearchSession(userId, title = "New research") {
+  const ts = nowIso();
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO research_sessions (user_id, title, hermes_session_id, created_at, updated_at)
+       VALUES (?, ?, '', ?, ?)`
+    )
+    .run(userId, String(title || "New research").trim().slice(0, 120) || "New research", ts, ts);
+
+  const id = Number(lastInsertRowid);
+  const sessionId = hermesSessionIdForResearch(userId, id);
+  db.prepare("UPDATE research_sessions SET hermes_session_id = ? WHERE id = ?").run(sessionId, id);
+  return serializeResearchSession(
+    db.prepare("SELECT * FROM research_sessions WHERE id = ?").get(id)
+  );
+}
+
+export async function getResearchSession(userId, sessionId) {
+  const row = db
+    .prepare("SELECT * FROM research_sessions WHERE id = ? AND user_id = ?")
+    .get(sessionId, userId);
+  return serializeResearchSession(row);
+}
+
+export async function deleteResearchSession(userId, sessionId) {
+  const result = db
+    .prepare("DELETE FROM research_sessions WHERE id = ? AND user_id = ?")
+    .run(sessionId, userId);
+  return result.changes > 0;
+}
+
+export async function listResearchMessages(sessionId) {
+  return db
+    .prepare(
+      `SELECT * FROM research_messages
+       WHERE session_id = ?
+       ORDER BY created_at ASC, id ASC`
+    )
+    .all(sessionId)
+    .map(serializeResearchMessage);
+}
+
+export async function getResearchThread(userId, sessionId) {
+  const session = await getResearchSession(userId, sessionId);
+  if (!session) return null;
+  const messages = await listResearchMessages(session.id);
+  return { session, messages };
+}
+
+export async function addResearchMessage(sessionId, role, content) {
+  if (role !== "user" && role !== "assistant") {
+    throw new Error("role must be user or assistant");
+  }
+  const text = String(content || "").trim();
+  if (!text) throw new Error("content is required");
+
+  const session = db.prepare("SELECT id, title FROM research_sessions WHERE id = ?").get(sessionId);
+  if (!session) throw new Error(`No research session with id ${sessionId}`);
+
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO research_messages (session_id, role, content)
+       VALUES (?, ?, ?)`
+    )
+    .run(sessionId, role, text);
+
+  const ts = nowIso();
+  // Title from first user message if still default.
+  if (role === "user" && (!session.title || session.title === "New research")) {
+    const title = researchTitleFromQuery(text);
+    db.prepare("UPDATE research_sessions SET title = ?, updated_at = ? WHERE id = ?").run(
+      title,
+      ts,
+      sessionId
+    );
+  } else {
+    db.prepare("UPDATE research_sessions SET updated_at = ? WHERE id = ?").run(ts, sessionId);
+  }
+
+  return serializeResearchMessage(
+    db.prepare("SELECT * FROM research_messages WHERE id = ?").get(Number(lastInsertRowid))
+  );
 }
 
 export default db;
