@@ -259,10 +259,7 @@ export default function App() {
           <span className="wl-brand-mark">M</span>
           <span className="home-brand-name">Musely</span>
         </div>
-        <HomeNavTabs
-          view={view === "settings" || view === "profile" ? "feed" : view}
-          onChange={(id) => goToView(id)}
-        />
+        <HomeNavTabs view={view} onChange={(id) => goToView(id)} />
         <div className="home-user">
           <NotificationCenter
             onOpenFeed={openFeedFromNotification}
