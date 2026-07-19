@@ -150,6 +150,28 @@ CREATE INDEX IF NOT EXISTS idx_feed_discussions_user_post
 CREATE INDEX IF NOT EXISTS idx_feed_discussion_messages_disc
   ON feed_discussion_messages(discussion_id, created_at ASC);
 
+CREATE TABLE IF NOT EXISTS research_sessions (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title               TEXT NOT NULL DEFAULT 'New research',
+  hermes_session_id   TEXT NOT NULL,
+  created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS research_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id      INTEGER NOT NULL REFERENCES research_sessions(id) ON DELETE CASCADE,
+  role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content         TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_sessions_user
+  ON research_sessions(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_research_messages_session
+  ON research_messages(session_id, created_at ASC, id ASC);
+
 -- Legacy table (pre–feed-posts migration). Kept so existing DBs upgrade cleanly.
 CREATE TABLE IF NOT EXISTS feed_items (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

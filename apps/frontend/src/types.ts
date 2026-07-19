@@ -128,6 +128,28 @@ export interface FeedDiscussThread {
   messages: FeedDiscussionMessage[];
 }
 
+export interface ResearchSession {
+  id: number;
+  user_id: number;
+  title: string;
+  hermes_session_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResearchMessage {
+  id: number;
+  session_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface ResearchThread {
+  session: ResearchSession;
+  messages: ResearchMessage[];
+}
+
 export interface FeedListResponse {
   posts: FeedPost[];
   total: number;

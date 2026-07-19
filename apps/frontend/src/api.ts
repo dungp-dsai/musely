@@ -10,6 +10,8 @@ import type {
   FeedListResponse,
   FeedUserPrefs,
   FeedDiscussThread,
+  ResearchSession,
+  ResearchThread,
 } from "./types";
 import type { CronJob } from "./lib/cronTypes";
 import { streamMuselyAgentRequest } from "./lib/muselyAgentRequest";
@@ -232,6 +234,43 @@ export const api = {
       signal: opts.signal,
       onWarming: opts.onWarming,
       onLine: opts.onActivity,
+      onChunk: opts.onChunk,
+    });
+    if (!text.trim()) {
+      throw new Error("Your agent didn't reply. Please try again.");
+    }
+    return text.trim();
+  },
+
+  listResearchSessions: (): Promise<{ sessions: ResearchSession[] }> =>
+    apiFetch("/api/research/sessions").then(json),
+
+  createResearchSession: (title?: string): Promise<{ session: ResearchSession }> =>
+    apiFetch("/api/research/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title || "New research" }),
+    }).then(json),
+
+  getResearchThread: (sessionId: number): Promise<ResearchThread> =>
+    apiFetch(`/api/research/sessions/${sessionId}`).then(json),
+
+  deleteResearchSession: (sessionId: number): Promise<{ ok: boolean }> =>
+    apiFetch(`/api/research/sessions/${sessionId}`, { method: "DELETE" }).then(json),
+
+  sendResearchChat: async (opts: {
+    sessionId: number;
+    message: string;
+    signal?: AbortSignal;
+    onWarming?: () => void;
+    onChunk?: (chunk: string, full: string) => void;
+  }): Promise<string> => {
+    const text = await streamMuselyAgentRequest({
+      apiBase: API_BASE,
+      path: `/api/research/sessions/${opts.sessionId}/chat`,
+      body: { message: opts.message },
+      signal: opts.signal,
+      onWarming: opts.onWarming,
       onChunk: opts.onChunk,
     });
     if (!text.trim()) {

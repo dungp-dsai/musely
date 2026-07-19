@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import PostView from "./components/PostView";
 import FeedView from "./components/FeedView";
+import ResearchView from "./components/ResearchView";
+import HomeNavTabs from "./components/HomeNavTabs";
 import UserMenu from "./components/UserMenu";
 import NotificationCenter, {
   NotificationToastHost,
@@ -18,7 +20,7 @@ import { useNotifications } from "./notifications/NotificationContext";
 import { api } from "./api";
 import type { Post, PostSummary } from "./types";
 
-type View = "feed" | "write" | "settings" | "profile";
+type View = "feed" | "write" | "research" | "settings" | "profile";
 
 const isAdminRoute = () =>
   window.location.pathname.replace(/\/+$/, "").toLowerCase() === "/admin";
@@ -257,28 +259,10 @@ export default function App() {
           <span className="wl-brand-mark">M</span>
           <span className="home-brand-name">Musely</span>
         </div>
-
-        <nav className="home-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === "feed"}
-            className={`home-tab ${view === "feed" ? "active" : ""}`}
-            onClick={() => goToView("feed")}
-          >
-            Feed
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === "write"}
-            className={`home-tab ${view === "write" ? "active" : ""}`}
-            onClick={() => goToView("write")}
-          >
-            Write
-          </button>
-        </nav>
-
+        <HomeNavTabs
+          view={view === "settings" || view === "profile" ? "feed" : view}
+          onChange={(id) => goToView(id)}
+        />
         <div className="home-user">
           <NotificationCenter
             onOpenFeed={openFeedFromNotification}
@@ -303,6 +287,8 @@ export default function App() {
             discussPostId={discussPostId}
             onDiscussPostHandled={clearDiscussPostId}
           />
+        ) : view === "research" ? (
+          <ResearchView user={user} />
         ) : (
           <div className="app">
             <Sidebar

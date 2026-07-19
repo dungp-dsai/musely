@@ -37,6 +37,11 @@ import {
   getFeedDiscussionThread,
   ensureFeedDiscussion,
   addFeedDiscussionMessage,
+  listResearchSessions,
+  createResearchSession,
+  getResearchThread,
+  addResearchMessage,
+  deleteResearchSession,
 } from "./db.js";
 import { buildTaskDiscussMessages, taskDiscussSessionId } from "./task-chat.js";
 import { generateFeedItems } from "./feed.js";
@@ -59,6 +64,7 @@ import {
 } from "./musely-agent-request.js";
 import { buildFeedRefreshMessages } from "./feed-agent.js";
 import { buildFeedDiscussMessages } from "./feed-discuss.js";
+import { buildResearchMessages } from "./research-chat.js";
 import { muselyAgentApiEnvConfigured } from "./musely-agent-api-env.js";
 import {
   muselyAgentCronConfigured,
@@ -906,6 +912,81 @@ app.post("/api/feed/posts/:id/discuss", requireUser, async (req, res) => {
 app.get("/api/feed/prefs", requireUser, (req, res) =>
   asJson(res, () => getFeedUserPrefs(req.user.id))
 );
+
+// ---------- Research (Gemini-style agent chat) ----------
+
+app.get("/api/research/sessions", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const sessions = await listResearchSessions(req.user.id);
+    return { sessions };
+  })
+);
+
+app.post("/api/research/sessions", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const title = typeof req.body?.title === "string" ? req.body.title : "New research";
+    const session = await createResearchSession(req.user.id, title);
+    return { session };
+  })
+);
+
+app.get("/api/research/sessions/:id", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const thread = await getResearchThread(req.user.id, Number(req.params.id));
+    if (!thread) throw new Error("Not found");
+    return thread;
+  })
+);
+
+app.delete("/api/research/sessions/:id", requireUser, (req, res) =>
+  asJson(res, async () => {
+    const ok = await deleteResearchSession(req.user.id, Number(req.params.id));
+    if (!ok) throw new Error("Not found");
+    return { ok: true };
+  })
+);
+
+app.post("/api/research/sessions/:id/chat", requireUser, async (req, res) => {
+  const sessionId = Number(req.params.id);
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) return res.status(400).json({ error: "message is required" });
+
+  const thread = await getResearchThread(req.user.id, sessionId);
+  if (!thread) return res.status(404).json({ error: "Not found" });
+
+  const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
+  if (warming) return;
+
+  await addResearchMessage(sessionId, "user", message);
+  const messages = buildResearchMessages(message);
+
+  const controller = new AbortController();
+  const abortUpstream = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abortUpstream);
+  res.on("close", abortUpstream);
+
+  try {
+    await streamMuselyAgentChat({
+      messages,
+      res,
+      signal: controller.signal,
+      target,
+      sessionId: thread.session.hermes_session_id,
+      onComplete: async (reply) => {
+        await addResearchMessage(sessionId, "assistant", reply);
+      },
+    });
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    req.off("aborted", abortUpstream);
+    res.off("close", abortUpstream);
+  }
+});
 
 app.put("/api/feed/prefs", requireUser, (req, res) =>
   asJson(res, () =>
