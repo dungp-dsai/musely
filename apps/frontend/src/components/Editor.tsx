@@ -251,7 +251,7 @@ export default function Editor({
     return () => window.removeEventListener("keydown", onKey);
   }, [editor, onQueueTask, openComposer]);
 
-  // Paste image -> upload + insert image block + generate caption.
+  // Paste image → upload + insert image block (caption via right-click).
   useEffect(() => {
     if (!editor) return;
     if (chatOpen) return;
@@ -277,25 +277,16 @@ export default function Editor({
       void (async () => {
         try {
           const uploaded = await api.uploadEditorImage(file);
-          const captionPlaceholder = "Generating caption…";
-
           (editor.chain().focus() as any)
             .insertImageWithCaption({
               src: uploaded.url,
               alt: "",
-              caption: captionPlaceholder,
+              caption: "",
               mediaId: uploaded.id,
             })
             .run();
-
-          try {
-            const caption = await api.generateEditorImageCaption(uploaded.id);
-            (editor.commands as any).setImageCaption(uploaded.id, caption || "Image");
-          } catch {
-            // Keep the placeholder caption; don't disrupt editing.
-          }
         } catch {
-          // Upload failed — do nothing (paste stays unsupported).
+          // Upload failed — leave paste alone.
         } finally {
           imageUploadInFlight.current = false;
         }

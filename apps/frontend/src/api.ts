@@ -458,15 +458,6 @@ export const api = {
     return apiFetch("/api/editor/images/upload", { method: "POST", body: fd }).then(json);
   },
 
-  generateEditorImageCaption: async (id: string): Promise<string> => {
-    const res = await apiFetch(`/api/editor/images/${encodeURIComponent(id)}/caption`, {
-      method: "POST",
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `Caption failed (${res.status})`);
-    return String(body.caption || "Image");
-  },
-
   addVersion: (
     postId: number,
     data: { content: string; note?: string; title?: string; source?: "user" | "ai"; resolvesFeedbackId?: number }

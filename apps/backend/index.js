@@ -5,7 +5,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import multer from "multer";
 import path from "node:path";
-import { mkdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { createReadStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
@@ -61,7 +61,6 @@ import {
 import {
   muselyAgentChatConfigured,
   listMuselyAgentModels,
-  completeMuselyAgentChat,
   streamMuselyAgentChat,
 } from "./musely-agent-chat.js";
 import {
@@ -784,56 +783,6 @@ app.get("/api/editor/images/:fileId", requireUser, (req, res) => {
   // Uploaded images are immutable; allow aggressive caching.
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   res.sendFile(filePath);
-});
-
-app.post("/api/editor/images/:fileId/caption", requireUser, async (req, res) => {
-  const fileId = String(req.params.fileId || "");
-  const filePath = imagePathForUser(req.user.id, fileId);
-  if (!filePath) return res.status(400).json({ error: "Invalid image id" });
-  if (!existsSync(filePath)) return res.status(404).json({ error: "Not found" });
-
-  const ext = path.extname(filePath);
-  const mimeType = imageMimeFromExt(ext);
-
-  if (!muselyAgentChatConfigured()) {
-    return res
-      .status(503)
-      .json({ error: "Musely agent not configured — can't generate image captions yet." });
-  }
-
-  const { target, warming } = await resolveMuselyAgentTarget(req.user.id, res);
-  if (warming) return;
-
-  // Inline data URL so Hermes can access the image without needing any auth.
-  const bytes = readFileSync(filePath);
-  const b64 = bytes.toString("base64");
-  const dataUrl = `data:${mimeType};base64,${b64}`;
-
-  const messages = [
-    {
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text:
-            "Generate a concise, natural caption for this image. Return ONLY the caption text (no quotes, no bullets).",
-        },
-        { type: "image_url", image_url: { url: dataUrl } },
-      ],
-    },
-  ];
-
-  try {
-    const caption = await completeMuselyAgentChat({
-      messages,
-      target,
-      sessionId: `caption-u${req.user.id}`,
-    });
-    return res.json({ caption: caption || "Image" });
-  } catch (err) {
-    console.error("[image caption]", err?.message || err);
-    return res.json({ caption: "Image" });
-  }
 });
 
 // ---------- Posts (authenticated) ----------
