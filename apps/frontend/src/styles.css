@@ -1665,6 +1665,27 @@ button {
   margin: 0;
 }
 
+.doc-editor .ProseMirror figure.musely-figure {
+  margin: 0.9em 0;
+  padding: 0;
+}
+
+.doc-editor .ProseMirror figure.musely-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 10px;
+}
+
+.doc-editor .ProseMirror figure.musely-figure figcaption {
+  margin-top: 8px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
 .doc-editor .ProseMirror ul,
 .doc-editor .ProseMirror ol {
   padding-left: 1.5em;

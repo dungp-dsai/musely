@@ -6,12 +6,14 @@ import SelectionPopup from "./SelectionPopup";
 import SelectionToolbar from "./SelectionToolbar";
 import TaskHoverCard from "./TaskHoverCard";
 import type { Feedback } from "../types";
+import { api } from "../api";
 import {
   TaskHighlight,
   setTaskHighlightState,
   TASK_HIGHLIGHT_META,
   type TaskHighlightItem,
 } from "../extensions/taskHighlight";
+import { ImageWithCaption } from "../extensions/imageWithCaption";
 
 interface Props {
   initialContent: string;
@@ -67,6 +69,7 @@ export default function Editor({
   const chipTimer = useRef<ReturnType<typeof setTimeout>>();
   const selecting = useRef(false);
   const composerOpen = useRef(false);
+  const imageUploadInFlight = useRef(false);
 
   const highlightItems: TaskHighlightItem[] = useMemo(
     () =>
@@ -89,6 +92,7 @@ export default function Editor({
       StarterKit,
       Placeholder.configure({ placeholder: placeholder || "Start writing…" }),
       TaskHighlight,
+      ImageWithCaption,
     ],
     content: initialContent || "",
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
@@ -246,6 +250,61 @@ export default function Editor({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [editor, onQueueTask, openComposer]);
+
+  // Paste image -> upload + insert image block + generate caption.
+  useEffect(() => {
+    if (!editor) return;
+    if (chatOpen) return;
+    const root = editorWrap.current?.querySelector(".ProseMirror");
+    if (!root) return;
+
+    const onPaste = (e: Event) => {
+      const ce = e as ClipboardEvent;
+      if (imageUploadInFlight.current) return;
+      const dt = ce.clipboardData;
+      if (!dt) return;
+      const items = Array.from(dt.items || []);
+      const imageItem = items.find((it) => String(it.type || "").startsWith("image/"));
+      if (!imageItem) return;
+
+      const file = imageItem.getAsFile();
+      if (!file) return;
+
+      ce.preventDefault();
+      ce.stopPropagation();
+
+      imageUploadInFlight.current = true;
+      void (async () => {
+        try {
+          const uploaded = await api.uploadEditorImage(file);
+          const captionPlaceholder = "Generating caption…";
+
+          (editor.chain().focus() as any)
+            .insertImageWithCaption({
+              src: uploaded.url,
+              alt: "",
+              caption: captionPlaceholder,
+              mediaId: uploaded.id,
+            })
+            .run();
+
+          try {
+            const caption = await api.generateEditorImageCaption(uploaded.id);
+            (editor.commands as any).setImageCaption(uploaded.id, caption || "Image");
+          } catch {
+            // Keep the placeholder caption; don't disrupt editing.
+          }
+        } catch {
+          // Upload failed — do nothing (paste stays unsupported).
+        } finally {
+          imageUploadInFlight.current = false;
+        }
+      })();
+    };
+
+    root.addEventListener("paste", onPaste);
+    return () => root.removeEventListener("paste", onPaste);
+  }, [editor, chatOpen]);
 
   const handleMouseDown = () => {
     selecting.current = true;
