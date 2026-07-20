@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from "@tiptap/core";
+import { Node as TiptapNode, mergeAttributes } from "@tiptap/core";
 
 export type ImageWithCaptionAttrs = {
   src: string;
@@ -24,7 +24,7 @@ type MenuState = {
  *   <figcaption>...</figcaption>   <!-- only when caption is non-empty -->
  * </figure>
  */
-export const ImageWithCaption = Node.create({
+export const ImageWithCaption = TiptapNode.create({
   name: "imageWithCaption",
   group: "block",
   atom: true,
@@ -228,8 +228,8 @@ export const ImageWithCaption = Node.create({
         dom: figure,
         // Keep ProseMirror from treating caption keystrokes as editing/replacing the atom.
         stopEvent: (event) => {
-          const t = event.target as Node | null;
-          if (!t) return false;
+          const t = event.target;
+          if (!(t instanceof Node)) return false;
           if (t === input || input.contains(t)) return true;
           if (menu?.el.contains(t)) return true;
           return false;
