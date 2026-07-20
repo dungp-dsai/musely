@@ -142,6 +142,13 @@ export interface ResearchMessage {
   session_id: number;
   role: "user" | "assistant";
   content: string;
+  tool_events?: Array<{
+    id: string;
+    tool: string;
+    emoji?: string;
+    label?: string;
+    status: "running" | "completed";
+  }>;
   created_at: string;
 }
 

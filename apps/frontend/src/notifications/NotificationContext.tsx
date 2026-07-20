@@ -9,6 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "../api";
+import {
+  formatToolActivityLine,
+  upsertToolEvent,
+  type AgentToolEvent,
+} from "../lib/agentToolEvents";
 import { FEED_REFRESH_FAILED, toUserFacingError } from "../lib/userFacingErrors";
 import type { AppNotification, NotificationToast } from "./types";
 
@@ -28,6 +33,12 @@ type StartFeedDiscussOpts = {
   message: string;
 };
 
+type StartResearchChatOpts = {
+  sessionId: number;
+  sessionTitle: string;
+  message: string;
+};
+
 type NotificationContextValue = {
   notifications: AppNotification[];
   unreadCount: number;
@@ -37,22 +48,28 @@ type NotificationContextValue = {
   runningWritingJob: AppNotification | null;
   focusedDiscussJob: AppNotification | null;
   runningDiscussJob: AppNotification | null;
+  focusedResearchJob: AppNotification | null;
+  runningResearchJob: AppNotification | null;
   feedRevision: number;
   writingRevision: number;
   discussRevision: number;
+  researchRevision: number;
   toast: NotificationToast | null;
   startFeedRefresh: (opts?: StartFeedOpts) => void;
   startWritingQueue: (opts: StartWritingQueueOpts) => void;
   startFeedDiscuss: (opts: StartFeedDiscussOpts) => void;
+  startResearchChat: (opts: StartResearchChatOpts) => void;
   cancelFeedJob: (id: string) => void;
   cancelWritingQueueJob: (id: string) => void;
   cancelDiscussJob: (id: string) => void;
+  cancelResearchJob: (id: string) => void;
   retryFeedJob: (id: string) => void;
   retryWritingQueueJob: (id: string) => void;
   backgroundFeedJob: (id: string) => void;
   focusFeedJob: (id: string) => void;
   focusWritingQueueJob: (id: string) => void;
   focusDiscussJob: (id: string) => void;
+  focusResearchJob: (id: string) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
   dismiss: (id: string) => void;
@@ -98,6 +115,12 @@ function interruptedCopy(kind: AppNotification["kind"]) {
       body: "This discussion reply stopped when the page reloaded.",
     };
   }
+  if (kind === "research_chat") {
+    return {
+      title: "Research interrupted",
+      body: "This research reply stopped when the page reloaded.",
+    };
+  }
   return {
     title: "Feed build interrupted",
     body: "This build stopped when the page reloaded.",
@@ -137,11 +160,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [feedRevision, setFeedRevision] = useState(0);
   const [writingRevision, setWritingRevision] = useState(0);
   const [discussRevision, setDiscussRevision] = useState(0);
+  const [researchRevision, setResearchRevision] = useState(0);
   const [toast, setToast] = useState<NotificationToast | null>(null);
   const abortById = useRef<Map<string, AbortController>>(new Map());
   const feedInFlight = useRef(false);
   const writingInFlight = useRef(false);
   const discussInFlight = useRef(new Set<number>());
+  const researchInFlight = useRef(new Set<number>());
 
   useEffect(() => {
     try {
@@ -685,6 +710,181 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     [runDiscussJob]
   );
 
+  const runResearchJob = useCallback(
+    async (id: string, opts: StartResearchChatOpts) => {
+      abortById.current.get(id)?.abort();
+      const controller = new AbortController();
+      abortById.current.set(id, controller);
+      researchInFlight.current.add(opts.sessionId);
+
+      try {
+        await api.sendResearchChat({
+          sessionId: opts.sessionId,
+          message: opts.message,
+          signal: controller.signal,
+          onWarming: () =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                activity: ["Waking your agent"],
+                body: "Waking your agent…",
+                streamingReply: "",
+              })
+            ),
+          onChunk: (_chunk, full) =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                streamingReply: full,
+                body: "Musely agent is writing…",
+                activity: ["Musely agent is writing…"],
+              })
+            ),
+          onToolProgress: (progress) =>
+            setNotifications((prev) => {
+              const current = prev.find((n) => n.id === id);
+              const tools = upsertToolEvent(
+                (current?.toolEvents as AgentToolEvent[] | undefined) ?? [],
+                progress
+              );
+              const line = formatToolActivityLine(tools);
+              return patchNotification(prev, id, {
+                toolEvents: tools,
+                activity: [line],
+                body: line,
+              });
+            }),
+        });
+
+        const when = new Date().toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const titleSnippet =
+          opts.sessionTitle.trim().length > 42
+            ? `${opts.sessionTitle.trim().slice(0, 42)}…`
+            : opts.sessionTitle.trim() || "Research";
+        const title = "Research ready";
+        const body = `“${titleSnippet}” · ${when}`;
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "done",
+            title,
+            body,
+            error: null,
+            focused: false,
+            read: false,
+            activity: [],
+            streamingReply: "",
+            toolEvents: [],
+          })
+        );
+        setResearchRevision((v) => v + 1);
+        showToast({ id, title, body, tone: "success" });
+      } catch (e) {
+        const err = e as Error;
+        if (err.name === "AbortError" || /aborted/i.test(err.message)) {
+          setNotifications((prev) =>
+            patchNotification(prev, id, {
+              status: "cancelled",
+              title: "Research cancelled",
+              body: "You stopped this research.",
+              focused: false,
+              read: true,
+              streamingReply: "",
+              toolEvents: [],
+            })
+          );
+          return;
+        }
+        const message = toUserFacingError(
+          err.message,
+          "Couldn't finish this research. Please try again."
+        );
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "error",
+            title: "Research failed",
+            body: message,
+            error: message,
+            focused: true,
+            read: false,
+            streamingReply: "",
+          })
+        );
+        showToast({
+          id,
+          title: "Research failed",
+          body: message,
+          tone: "error",
+        });
+      } finally {
+        abortById.current.delete(id);
+        researchInFlight.current.delete(opts.sessionId);
+      }
+    },
+    [showToast]
+  );
+
+  const startResearchChat = useCallback(
+    (opts: StartResearchChatOpts) => {
+      const message = opts.message.trim();
+      if (!message) return;
+      if (researchInFlight.current.has(opts.sessionId)) return;
+
+      const id = makeId();
+      const now = Date.now();
+      const titleSnippet =
+        opts.sessionTitle.trim().length > 36
+          ? `${opts.sessionTitle.trim().slice(0, 36)}…`
+          : opts.sessionTitle.trim() || "Research";
+      const next: AppNotification = {
+        id,
+        kind: "research_chat",
+        title: "Researching…",
+        body: `“${titleSnippet}”`,
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+        read: true,
+        focused: true,
+        activity: ["Starting research…"],
+        sessionId: opts.sessionId,
+        sessionTitle: opts.sessionTitle,
+        userMessage: message,
+        streamingReply: "",
+        toolEvents: [],
+        runKey: 0,
+        startedAt: now,
+        error: null,
+      };
+
+      setNotifications((prev) => {
+        const kept = prev.map((n) =>
+          n.kind === "research_chat" &&
+          n.status === "running" &&
+          n.sessionId === opts.sessionId
+            ? {
+                ...n,
+                status: "cancelled" as const,
+                title: "Research cancelled",
+                body: "Superseded by a newer question.",
+                focused: false,
+                read: true,
+                updatedAt: now,
+                streamingReply: "",
+                toolEvents: [],
+              }
+            : n.kind === "research_chat" && n.sessionId === opts.sessionId
+              ? { ...n, focused: false }
+              : n
+        );
+        return [next, ...kept.filter((row) => row.id !== id)].slice(0, MAX_NOTIFICATIONS);
+      });
+
+      void runResearchJob(id, { ...opts, message });
+    },
+    [runResearchJob]
+  );
+
   const cancelFeedJob = useCallback((id: string) => {
     abortById.current.get(id)?.abort();
     abortById.current.delete(id);
@@ -728,6 +928,24 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         focused: false,
         read: true,
         streamingReply: "",
+      })
+    );
+  }, [notifications]);
+
+  const cancelResearchJob = useCallback((id: string) => {
+    const item = notifications.find((n) => n.id === id);
+    abortById.current.get(id)?.abort();
+    abortById.current.delete(id);
+    if (item?.sessionId != null) researchInFlight.current.delete(item.sessionId);
+    setNotifications((prev) =>
+      patchNotification(prev, id, {
+        status: "cancelled",
+        title: "Research cancelled",
+        body: "You stopped this research.",
+        focused: false,
+        read: true,
+        streamingReply: "",
+        toolEvents: [],
       })
     );
   }, [notifications]);
@@ -800,6 +1018,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const focusResearchJob = useCallback((id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.id === id
+          ? { ...n, focused: true, updatedAt: Date.now() }
+          : n.kind === "research_chat" && n.status === "running"
+            ? { ...n, focused: false }
+            : n
+      )
+    );
+  }, []);
+
   const markRead = useCallback((id: string) => {
     setNotifications((prev) => patchNotification(prev, id, { read: true }));
   }, []);
@@ -819,6 +1049,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (item?.kind === "writing_queue") writingInFlight.current = false;
       else if (item?.kind === "feed_discuss") {
         if (item.postId != null) discussInFlight.current.delete(item.postId);
+      } else if (item?.kind === "research_chat") {
+        if (item.sessionId != null) researchInFlight.current.delete(item.sessionId);
       } else feedInFlight.current = false;
     }
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -860,6 +1092,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     notifications.find((n) => n.kind === "feed_discuss" && n.status === "running") ??
     null;
 
+  const focusedResearchJob =
+    notifications.find(
+      (n) =>
+        n.kind === "research_chat" &&
+        n.focused &&
+        (n.status === "running" || n.status === "error")
+    ) ?? null;
+
+  const runningResearchJob =
+    notifications.find((n) => n.kind === "research_chat" && n.status === "running") ??
+    null;
+
   const unreadCount = notifications.filter(
     (n) => !n.read && (n.status === "done" || n.status === "error")
   ).length;
@@ -874,22 +1118,28 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       runningWritingJob,
       focusedDiscussJob,
       runningDiscussJob,
+      focusedResearchJob,
+      runningResearchJob,
       feedRevision,
       writingRevision,
       discussRevision,
+      researchRevision,
       toast,
       startFeedRefresh,
       startWritingQueue,
       startFeedDiscuss,
+      startResearchChat,
       cancelFeedJob,
       cancelWritingQueueJob,
       cancelDiscussJob,
+      cancelResearchJob,
       retryFeedJob,
       retryWritingQueueJob,
       backgroundFeedJob,
       focusFeedJob,
       focusWritingQueueJob,
       focusDiscussJob,
+      focusResearchJob,
       markRead,
       markAllRead,
       dismiss,
@@ -904,22 +1154,28 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       runningWritingJob,
       focusedDiscussJob,
       runningDiscussJob,
+      focusedResearchJob,
+      runningResearchJob,
       feedRevision,
       writingRevision,
       discussRevision,
+      researchRevision,
       toast,
       startFeedRefresh,
       startWritingQueue,
       startFeedDiscuss,
+      startResearchChat,
       cancelFeedJob,
       cancelWritingQueueJob,
       cancelDiscussJob,
+      cancelResearchJob,
       retryFeedJob,
       retryWritingQueueJob,
       backgroundFeedJob,
       focusFeedJob,
       focusWritingQueueJob,
       focusDiscussJob,
+      focusResearchJob,
       markRead,
       markAllRead,
       dismiss,

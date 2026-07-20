@@ -8,6 +8,7 @@ import { relativeTime } from "../utils";
 type Props = {
   onOpenFeed?: (opts?: { discussPostId?: number }) => void;
   onOpenWriting?: (postId?: number) => void;
+  onOpenResearch?: (opts?: { sessionId?: number }) => void;
 };
 
 function BellIcon({ active }: { active?: boolean }) {
@@ -65,7 +66,9 @@ function NotificationRow({
   const activeLabel =
     item.kind === "feed_discuss" && item.status === "running"
       ? "Musely agent is typing…"
-      : timeline?.steps.find((s) => s.status === "active")?.label ?? null;
+      : item.kind === "research_chat" && item.status === "running"
+        ? item.activity[0] || "Researching…"
+        : timeline?.steps.find((s) => s.status === "active")?.label ?? null;
 
   return (
     <div
@@ -112,6 +115,7 @@ function openNotificationDestination(
   opts: {
     onOpenFeed?: (opts?: { discussPostId?: number }) => void;
     onOpenWriting?: (postId?: number) => void;
+    onOpenResearch?: (opts?: { sessionId?: number }) => void;
   }
 ) {
   if (item.kind === "writing_queue") {
@@ -122,10 +126,18 @@ function openNotificationDestination(
     opts.onOpenFeed?.({ discussPostId: item.postId });
     return;
   }
+  if (item.kind === "research_chat") {
+    opts.onOpenResearch?.({ sessionId: item.sessionId });
+    return;
+  }
   opts.onOpenFeed?.();
 }
 
-export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
+export function NotificationToastHost({
+  onOpenFeed,
+  onOpenWriting,
+  onOpenResearch,
+}: Props) {
   const {
     notifications,
     toast,
@@ -134,6 +146,7 @@ export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
     focusFeedJob,
     focusWritingQueueJob,
     focusDiscussJob,
+    focusResearchJob,
   } = useNotifications();
 
   useEffect(() => {
@@ -152,10 +165,11 @@ export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
       return;
     }
     markRead(item.id);
-    openNotificationDestination(item, { onOpenFeed, onOpenWriting });
+    openNotificationDestination(item, { onOpenFeed, onOpenWriting, onOpenResearch });
     if (item.status === "running" || item.status === "error" || item.kind === "feed_discuss") {
       if (item.kind === "writing_queue") focusWritingQueueJob(item.id);
       else if (item.kind === "feed_discuss") focusDiscussJob(item.id);
+      else if (item.kind === "research_chat") focusResearchJob(item.id);
       else if (item.status === "running" || item.status === "error") focusFeedJob(item.id);
     }
   };
@@ -189,7 +203,11 @@ export function NotificationToastHost({ onOpenFeed, onOpenWriting }: Props) {
   );
 }
 
-export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props) {
+export default function NotificationCenter({
+  onOpenFeed,
+  onOpenWriting,
+  onOpenResearch,
+}: Props) {
   const {
     notifications,
     unreadCount,
@@ -199,9 +217,11 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
     focusFeedJob,
     focusWritingQueueJob,
     focusDiscussJob,
+    focusResearchJob,
     cancelFeedJob,
     cancelWritingQueueJob,
     cancelDiscussJob,
+    cancelResearchJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -224,11 +244,13 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
 
   const handleSelect = (item: AppNotification) => {
     markRead(item.id);
-    openNotificationDestination(item, { onOpenFeed, onOpenWriting });
+    openNotificationDestination(item, { onOpenFeed, onOpenWriting, onOpenResearch });
     if (item.kind === "writing_queue") {
       if (item.status === "running" || item.status === "error") focusWritingQueueJob(item.id);
     } else if (item.kind === "feed_discuss") {
       focusDiscussJob(item.id);
+    } else if (item.kind === "research_chat") {
+      focusResearchJob(item.id);
     } else if (item.status === "running" || item.status === "error") {
       focusFeedJob(item.id);
     }
@@ -294,6 +316,8 @@ export default function NotificationCenter({ onOpenFeed, onOpenWriting }: Props)
                         cancelWritingQueueJob(item.id);
                       } else if (item.kind === "feed_discuss") {
                         cancelDiscussJob(item.id);
+                      } else if (item.kind === "research_chat") {
+                        cancelResearchJob(item.id);
                       } else {
                         cancelFeedJob(item.id);
                       }

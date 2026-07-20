@@ -184,6 +184,10 @@ function ensureResearchTables() {
     CREATE INDEX IF NOT EXISTS idx_research_messages_session
       ON research_messages(session_id, created_at ASC, id ASC);
   `);
+  const cols = db.prepare("PRAGMA table_info(research_messages)").all().map((c) => c.name);
+  if (!cols.includes("tool_events")) {
+    db.exec("ALTER TABLE research_messages ADD COLUMN tool_events TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 function nowIso() {
@@ -1079,6 +1083,25 @@ function serializeResearchSession(row) {
   };
 }
 
+function parseToolEventsJson(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((t) => t && typeof t.tool === "string")
+      .map((t, i) => ({
+        id: String(t.id || t.toolCallId || `${t.tool}-${i}`),
+        tool: String(t.tool),
+        emoji: typeof t.emoji === "string" ? t.emoji : undefined,
+        label: typeof t.label === "string" ? t.label : undefined,
+        status: t.status === "running" ? "running" : "completed",
+      }));
+  } catch {
+    return [];
+  }
+}
+
 function serializeResearchMessage(row) {
   if (!row) return null;
   return {
@@ -1086,6 +1109,7 @@ function serializeResearchMessage(row) {
     session_id: row.session_id,
     role: row.role,
     content: row.content,
+    tool_events: parseToolEventsJson(row.tool_events),
     created_at: row.created_at,
   };
 }
@@ -1152,7 +1176,7 @@ export async function getResearchThread(userId, sessionId) {
   return { session, messages };
 }
 
-export async function addResearchMessage(sessionId, role, content) {
+export async function addResearchMessage(sessionId, role, content, toolEvents = []) {
   if (role !== "user" && role !== "assistant") {
     throw new Error("role must be user or assistant");
   }
@@ -1162,12 +1186,26 @@ export async function addResearchMessage(sessionId, role, content) {
   const session = db.prepare("SELECT id, title FROM research_sessions WHERE id = ?").get(sessionId);
   if (!session) throw new Error(`No research session with id ${sessionId}`);
 
+  const toolsJson = JSON.stringify(
+    Array.isArray(toolEvents)
+      ? toolEvents
+          .filter((t) => t && typeof t.tool === "string")
+          .map((t, i) => ({
+            id: String(t.id || t.toolCallId || `${t.tool}-${i}`),
+            tool: String(t.tool),
+            emoji: typeof t.emoji === "string" ? t.emoji : undefined,
+            label: typeof t.label === "string" ? t.label : undefined,
+            status: t.status === "running" ? "running" : "completed",
+          }))
+      : []
+  );
+
   const { lastInsertRowid } = db
     .prepare(
-      `INSERT INTO research_messages (session_id, role, content)
-       VALUES (?, ?, ?)`
+      `INSERT INTO research_messages (session_id, role, content, tool_events)
+       VALUES (?, ?, ?, ?)`
     )
-    .run(sessionId, role, text);
+    .run(sessionId, role, text, toolsJson);
 
   const ts = nowIso();
   // Title from first user message if still default.

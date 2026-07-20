@@ -264,6 +264,7 @@ export const api = {
     signal?: AbortSignal;
     onWarming?: () => void;
     onChunk?: (chunk: string, full: string) => void;
+    onToolProgress?: (tool: import("./lib/muselyAgentStream").AgentToolProgress) => void;
   }): Promise<string> => {
     const text = await streamMuselyAgentRequest({
       apiBase: API_BASE,
@@ -272,6 +273,7 @@ export const api = {
       signal: opts.signal,
       onWarming: opts.onWarming,
       onChunk: opts.onChunk,
+      onToolProgress: opts.onToolProgress,
     });
     if (!text.trim()) {
       throw new Error("Your agent didn't reply. Please try again.");
@@ -445,6 +447,16 @@ export const api = {
 
   deletePost: (id: number): Promise<{ ok: boolean }> =>
     apiFetch(`/api/posts/${id}`, { method: "DELETE" }).then(json),
+
+  uploadEditorImage: async (file: File): Promise<{
+    id: string;
+    url: string;
+    mimeType: string;
+  }> => {
+    const fd = new FormData();
+    fd.append("image", file);
+    return apiFetch("/api/editor/images/upload", { method: "POST", body: fd }).then(json);
+  },
 
   addVersion: (
     postId: number,
