@@ -20,6 +20,7 @@ interface Props {
   onDelete: (id: number) => void;
   onMarkDone: (id: number) => void;
   onStartNow: () => void;
+  onStartTask: (id: number) => void;
   onScheduleLater: () => void;
 }
 
@@ -63,6 +64,7 @@ export default function QueuePanel({
   onDelete,
   onMarkDone,
   onStartNow,
+  onStartTask,
   onScheduleLater,
 }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -187,6 +189,16 @@ export default function QueuePanel({
                       <div className="queue-task">{f.content}</div>
                     </div>
                     <div className="queue-foot" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="queue-run-btn"
+                        title="Run this task only"
+                        disabled={busy}
+                        onClick={() => onStartTask(f.id)}
+                      >
+                        <PlayIcon />
+                        Run
+                      </button>
                       <button
                         type="button"
                         className="task-hover-btn cancel sm"

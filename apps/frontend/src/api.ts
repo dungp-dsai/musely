@@ -321,6 +321,8 @@ export const api = {
     postId: number;
     postTitle: string;
     taskCount: number;
+    /** When set, only these feedback ids are researched. */
+    taskIds?: number[];
     signal?: AbortSignal;
     onWarming?: () => void;
     onActivity?: (line: string) => void;
@@ -331,9 +333,17 @@ export const api = {
 
     const postBefore = await api.getPost(opts.postId);
     const openTasks = postBefore.feedback.filter((f) => f.status !== "done");
+    const scopedTasks =
+      opts.taskIds && opts.taskIds.length > 0
+        ? openTasks.filter((f) => opts.taskIds!.includes(f.id))
+        : openTasks;
+    if (scopedTasks.length === 0) {
+      throw new Error("No open tasks to run.");
+    }
+
     const beforeIds = new Set<number>();
     await Promise.all(
-      openTasks.map(async (f) => {
+      scopedTasks.map(async (f) => {
         try {
           const thread = await api.getTaskThread(f.id);
           for (const w of thread.work) beforeIds.add(w.id);
@@ -343,20 +353,39 @@ export const api = {
       })
     );
 
-    const n = opts.taskCount;
+    const n = scopedTasks.length;
     const label = n === 1 ? "1 queued task" : `${n} queued tasks`;
+    const onlyIds = scopedTasks.map((f) => f.id);
+    const single = n === 1 ? scopedTasks[0] : null;
+    const scopeLines = single
+      ? [
+          `ONLY work this one task — ignore every other queued item:`,
+          `- feedback_id ${single.id}`,
+          `- task: ${single.content}`,
+          single.context ? `- context: “${single.context.slice(0, 240)}”` : null,
+        ].filter(Boolean)
+      : opts.taskIds && opts.taskIds.length > 0
+        ? [
+            `ONLY work these feedback ids (ignore all others): ${onlyIds.join(", ")}.`,
+          ]
+        : [`Work every open queued task for this piece.`];
+
     const messages = [
       {
         role: "user",
         content: [
-          `The user just hit Start on the AI writing queue.`,
+          single
+            ? `The user asked to run ONE task from the AI writing queue.`
+            : `The user just hit Start on the AI writing queue.`,
           ``,
           `Piece: "${opts.postTitle}" (post_id ${opts.postId}) — already set to In Progress.`,
-          `There ${n === 1 ? "is" : "are"} ${label} waiting.`,
+          `There ${n === 1 ? "is" : "are"} ${label} in scope.`,
+          ``,
+          ...scopeLines,
           ``,
           `Use the do-research skill to do this correctly (API only):`,
           `1. GET /api/active and GET /api/active/tasks — they must match this post_id.`,
-          `2. For each task: claim it if needed, then do a FRESH research pass and POST new findings to /api/feedback/:id/work.`,
+          `2. Claim the in-scope task(s) if needed, then do a FRESH research pass and POST new findings to /api/feedback/:id/work.`,
           `3. Do NOT skip because older findings already exist — Start means refresh. Leave prior findings in place; always append a new result.`,
           `4. Do not rewrite the draft or touch the UI.`,
           `5. Reply with one short confirmation only.`,
@@ -376,7 +405,9 @@ export const api = {
     }
 
     const postAfter = await api.getPost(opts.postId);
-    const afterTasks = postAfter.feedback.filter((f) => f.status !== "done");
+    const afterTasks = postAfter.feedback.filter(
+      (f) => f.status !== "done" && onlyIds.includes(f.id)
+    );
     let freshFindings = 0;
     await Promise.all(
       afterTasks.map(async (f) => {
