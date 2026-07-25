@@ -36,6 +36,8 @@ export interface AppNotification {
   postId?: number;
   postTitle?: string;
   taskCount?: number;
+  /** Optional subset of feedback ids for a scoped queue run. */
+  taskIds?: number[];
   /** Research chat session. */
   sessionId?: number;
   sessionTitle?: string;

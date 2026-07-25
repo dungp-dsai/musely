@@ -1052,6 +1052,38 @@ button {
   justify-content: flex-end;
 }
 
+.queue-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 999px;
+  padding: 5px 10px 5px 8px;
+  background: color-mix(in srgb, var(--accent) 8%, #fff);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.queue-run-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, #fff);
+  border-color: var(--accent);
+}
+
+.queue-run-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.queue-run-btn svg {
+  width: 11px;
+  height: 11px;
+}
+
 .queue-panel-footer {
   flex-shrink: 0;
   padding: 12px 14px 16px;

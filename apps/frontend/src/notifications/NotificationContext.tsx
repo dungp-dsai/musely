@@ -25,6 +25,8 @@ type StartWritingQueueOpts = {
   postId: number;
   postTitle: string;
   taskCount: number;
+  /** When set, only these feedback ids are researched. */
+  taskIds?: number[];
 };
 
 type StartFeedDiscussOpts = {
@@ -336,6 +338,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           postId: opts.postId,
           postTitle: opts.postTitle,
           taskCount: opts.taskCount,
+          taskIds: opts.taskIds,
           signal: controller.signal,
           onWarming: () =>
             setNotifications((prev) =>
@@ -510,7 +513,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       const next: AppNotification = {
         id,
         kind: "writing_queue",
-        title: "Researching your queue",
+        title: opts.taskIds?.length === 1 ? "Researching one task" : "Researching your queue",
         body:
           n === 1
             ? `Working 1 task on “${titleSnippet}”`
@@ -524,6 +527,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         postId: opts.postId,
         postTitle: opts.postTitle,
         taskCount: opts.taskCount,
+        taskIds: opts.taskIds,
         runKey: 0,
         startedAt: now,
         error: null,
@@ -967,7 +971,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       startWritingQueue({
         postId: existing.postId,
         postTitle: existing.postTitle || "Untitled",
-        taskCount: existing.taskCount || 1,
+        taskCount: existing.taskCount || existing.taskIds?.length || 1,
+        taskIds: existing.taskIds,
       });
     },
     [notifications, startWritingQueue]

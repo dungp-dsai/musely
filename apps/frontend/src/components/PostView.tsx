@@ -237,6 +237,19 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
     });
   };
 
+  const startSingleTask = (taskId: number) => {
+    if (startState === "starting" || startState === "working") return;
+    const task = post.feedback.find((f) => f.id === taskId && f.status !== "done");
+    if (!task) return;
+    setQueueOpen(true);
+    startWritingQueue({
+      postId: post.id,
+      postTitle: post.title || "Untitled",
+      taskCount: 1,
+      taskIds: [taskId],
+    });
+  };
+
   const openScheduleFromQueue = () => {
     const pending = post.feedback.filter((f) => f.status !== "done");
     const title = post.title || "Untitled";
@@ -403,6 +416,7 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
               onDelete={removeFeedback}
               onMarkDone={markFeedbackDone}
               onStartNow={startQueueNow}
+              onStartTask={startSingleTask}
               onScheduleLater={openScheduleFromQueue}
             />
           )}
