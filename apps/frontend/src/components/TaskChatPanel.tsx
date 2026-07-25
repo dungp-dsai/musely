@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Feedback, TaskThread } from "../types";
 import { api } from "../api";
+import { useNotifications } from "../notifications/NotificationContext";
 import { relativeTime } from "../utils";
 import DiscussModal from "./discuss/DiscussModal";
 import {
@@ -13,6 +14,8 @@ import {
 interface Props {
   taskId: number;
   feedback: Feedback;
+  postId: number;
+  postTitle: string;
   /** Bumps when a writing-queue job finishes so open panels refetch findings. */
   refreshKey?: number;
   onClose: () => void;
@@ -117,20 +120,32 @@ function TaskContextPreview({
 export default function TaskChatPanel({
   taskId,
   feedback,
+  postId,
+  postTitle,
   refreshKey = 0,
   onClose,
   onMarkDone,
   onCancel,
 }: Props) {
+  const { notifications, startTaskChat, taskChatRevision } = useNotifications();
   const [thread, setThread] = useState<TaskThread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
-  const [streamingReply, setStreamingReply] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+
+  const jobForTask =
+    notifications.find(
+      (n) =>
+        n.kind === "task_chat" &&
+        n.status === "running" &&
+        n.feedbackId === taskId
+    ) ?? null;
+  const sending = Boolean(jobForTask);
+  const pendingDisplay =
+    pendingUser || (sending ? jobForTask?.userMessage || null : null);
+  const streamingReply = jobForTask?.streamingReply || "";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,45 +165,27 @@ export default function TaskChatPanel({
   }, [load, refreshKey]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [thread?.messages, thread?.work, pendingUser, streamingReply, sending, loading]);
+    if (taskChatRevision === 0) return;
+    void load().then(() => setPendingUser(null));
+  }, [taskChatRevision, load]);
 
   useEffect(() => {
-    return () => abortRef.current?.abort();
-  }, []);
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [thread?.messages, thread?.work, pendingDisplay, streamingReply, sending, loading]);
 
-  const send = async () => {
+  const send = () => {
     const text = input.trim();
     if (!text || sending) return;
     setInput("");
     setPendingUser(text);
-    setStreamingReply("");
-    setSending(true);
     setError(null);
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      await api.sendTaskChat({
-        taskId,
-        message: text,
-        signal: controller.signal,
-        onChunk: (_chunk, full) => setStreamingReply(full),
-      });
-      setPendingUser(null);
-      setStreamingReply("");
-      await load();
-    } catch (e) {
-      if ((e as Error).name === "AbortError") return;
-      setError(e instanceof Error ? e.message : "Failed to send message");
-      await load();
-      setPendingUser(null);
-      setStreamingReply("");
-    } finally {
-      setSending(false);
-    }
+    startTaskChat({
+      taskId,
+      postId,
+      postTitle,
+      taskLabel: feedback.content,
+      message: text,
+    });
   };
 
   const work = thread?.work ?? [];
@@ -198,13 +195,13 @@ export default function TaskChatPanel({
   const threadCount = workCount + messages.length;
 
   const showPending =
-    pendingUser &&
+    pendingDisplay &&
     (!messages.length ||
       messages[messages.length - 1]?.role !== "user" ||
-      messages[messages.length - 1]?.content !== pendingUser);
+      messages[messages.length - 1]?.content !== pendingDisplay);
 
   const isEmpty =
-    !loading && threadCount === 0 && !pendingUser && !sending;
+    !loading && threadCount === 0 && !pendingDisplay && !sending;
 
   return createPortal(
     <DiscussModal
@@ -233,7 +230,7 @@ export default function TaskChatPanel({
       }
       input={input}
       onInputChange={setInput}
-      onSend={() => void send()}
+      onSend={send}
       sending={sending}
       placeholder="Ask a follow-up, request more sources, or suggest edits…"
       endRef={endRef}
@@ -283,7 +280,7 @@ export default function TaskChatPanel({
       {showPending && (
         <DiscussComment role="user" name="You" time="just now">
           <div className="feed-discuss-text">
-            <p className="feed-discuss-md-p">{pendingUser}</p>
+            <p className="feed-discuss-md-p">{pendingDisplay}</p>
           </div>
         </DiscussComment>
       )}

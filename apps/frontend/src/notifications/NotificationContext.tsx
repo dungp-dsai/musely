@@ -35,6 +35,14 @@ type StartFeedDiscussOpts = {
   message: string;
 };
 
+type StartTaskChatOpts = {
+  taskId: number;
+  postId: number;
+  postTitle: string;
+  taskLabel?: string;
+  message: string;
+};
+
 type StartResearchChatOpts = {
   sessionId: number;
   sessionTitle: string;
@@ -50,20 +58,25 @@ type NotificationContextValue = {
   runningWritingJob: AppNotification | null;
   focusedDiscussJob: AppNotification | null;
   runningDiscussJob: AppNotification | null;
+  focusedTaskChatJob: AppNotification | null;
+  runningTaskChatJob: AppNotification | null;
   focusedResearchJob: AppNotification | null;
   runningResearchJob: AppNotification | null;
   feedRevision: number;
   writingRevision: number;
   discussRevision: number;
+  taskChatRevision: number;
   researchRevision: number;
   toast: NotificationToast | null;
   startFeedRefresh: (opts?: StartFeedOpts) => void;
   startWritingQueue: (opts: StartWritingQueueOpts) => void;
   startFeedDiscuss: (opts: StartFeedDiscussOpts) => void;
+  startTaskChat: (opts: StartTaskChatOpts) => void;
   startResearchChat: (opts: StartResearchChatOpts) => void;
   cancelFeedJob: (id: string) => void;
   cancelWritingQueueJob: (id: string) => void;
   cancelDiscussJob: (id: string) => void;
+  cancelTaskChatJob: (id: string) => void;
   cancelResearchJob: (id: string) => void;
   retryFeedJob: (id: string) => void;
   retryWritingQueueJob: (id: string) => void;
@@ -71,6 +84,7 @@ type NotificationContextValue = {
   focusFeedJob: (id: string) => void;
   focusWritingQueueJob: (id: string) => void;
   focusDiscussJob: (id: string) => void;
+  focusTaskChatJob: (id: string) => void;
   focusResearchJob: (id: string) => void;
   markRead: (id: string) => void;
   markAllRead: () => void;
@@ -115,6 +129,12 @@ function interruptedCopy(kind: AppNotification["kind"]) {
     return {
       title: "Discussion interrupted",
       body: "This discussion reply stopped when the page reloaded.",
+    };
+  }
+  if (kind === "task_chat") {
+    return {
+      title: "Task chat interrupted",
+      body: "This task reply stopped when the page reloaded.",
     };
   }
   if (kind === "research_chat") {
@@ -162,12 +182,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [feedRevision, setFeedRevision] = useState(0);
   const [writingRevision, setWritingRevision] = useState(0);
   const [discussRevision, setDiscussRevision] = useState(0);
+  const [taskChatRevision, setTaskChatRevision] = useState(0);
   const [researchRevision, setResearchRevision] = useState(0);
   const [toast, setToast] = useState<NotificationToast | null>(null);
   const abortById = useRef<Map<string, AbortController>>(new Map());
   const feedInFlight = useRef(false);
   const writingInFlight = useRef(false);
   const discussInFlight = useRef(new Set<number>());
+  const taskChatInFlight = useRef(new Set<number>());
   const researchInFlight = useRef(new Set<number>());
 
   useEffect(() => {
@@ -714,6 +736,163 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     [runDiscussJob]
   );
 
+  const runTaskChatJob = useCallback(
+    async (id: string, opts: StartTaskChatOpts) => {
+      abortById.current.get(id)?.abort();
+      const controller = new AbortController();
+      abortById.current.set(id, controller);
+      taskChatInFlight.current.add(opts.taskId);
+
+      try {
+        await api.sendTaskChat({
+          taskId: opts.taskId,
+          message: opts.message,
+          signal: controller.signal,
+          onWarming: () =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                activity: ["Waking your agent"],
+                body: "Waking your agent…",
+                streamingReply: "",
+              })
+            ),
+          onChunk: (_chunk, full) =>
+            setNotifications((prev) =>
+              patchNotification(prev, id, {
+                streamingReply: full,
+                body: "Musely agent is typing…",
+                activity: ["Musely agent is typing…"],
+              })
+            ),
+        });
+
+        const when = new Date().toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const label =
+          (opts.taskLabel || opts.postTitle).trim().length > 42
+            ? `${(opts.taskLabel || opts.postTitle).trim().slice(0, 42)}…`
+            : (opts.taskLabel || opts.postTitle).trim() || `Task #${opts.taskId}`;
+        const title = "Your agent replied";
+        const body = `On “${label}” · ${when}`;
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "done",
+            title,
+            body,
+            error: null,
+            focused: false,
+            read: false,
+            activity: [],
+            streamingReply: "",
+          })
+        );
+        setTaskChatRevision((v) => v + 1);
+        showToast({ id, title, body, tone: "success" });
+      } catch (e) {
+        const err = e as Error;
+        if (err.name === "AbortError" || /aborted/i.test(err.message)) {
+          setNotifications((prev) =>
+            patchNotification(prev, id, {
+              status: "cancelled",
+              title: "Task chat cancelled",
+              body: "You stopped this reply.",
+              focused: false,
+              read: true,
+              streamingReply: "",
+            })
+          );
+          return;
+        }
+        const message = toUserFacingError(
+          err.message,
+          "Couldn't get a reply from your agent. Please try again."
+        );
+        setNotifications((prev) =>
+          patchNotification(prev, id, {
+            status: "error",
+            title: "Task chat failed",
+            body: message,
+            error: message,
+            focused: true,
+            read: false,
+            streamingReply: "",
+          })
+        );
+        showToast({
+          id,
+          title: "Task chat failed",
+          body: message,
+          tone: "error",
+        });
+      } finally {
+        abortById.current.delete(id);
+        taskChatInFlight.current.delete(opts.taskId);
+      }
+    },
+    [showToast]
+  );
+
+  const startTaskChat = useCallback(
+    (opts: StartTaskChatOpts) => {
+      const message = opts.message.trim();
+      if (!message) return;
+      if (taskChatInFlight.current.has(opts.taskId)) return;
+
+      const id = makeId();
+      const now = Date.now();
+      const labelRaw = (opts.taskLabel || opts.postTitle).trim() || `Task #${opts.taskId}`;
+      const titleSnippet =
+        labelRaw.length > 36 ? `${labelRaw.slice(0, 36)}…` : labelRaw;
+      const next: AppNotification = {
+        id,
+        kind: "task_chat",
+        title: "Discussing a writing task",
+        body: `On “${titleSnippet}”`,
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+        read: true,
+        focused: true,
+        activity: ["Musely agent is typing…"],
+        postId: opts.postId,
+        postTitle: opts.postTitle,
+        feedbackId: opts.taskId,
+        userMessage: message,
+        streamingReply: "",
+        runKey: 0,
+        startedAt: now,
+        error: null,
+      };
+
+      setNotifications((prev) => {
+        const kept = prev.map((n) =>
+          n.kind === "task_chat" &&
+          n.status === "running" &&
+          n.feedbackId === opts.taskId
+            ? {
+                ...n,
+                status: "cancelled" as const,
+                title: "Task chat cancelled",
+                body: "Superseded by a newer message.",
+                focused: false,
+                read: true,
+                updatedAt: now,
+                streamingReply: "",
+              }
+            : n.kind === "task_chat" && n.feedbackId === opts.taskId
+              ? { ...n, focused: false }
+              : n
+        );
+        return [next, ...kept.filter((row) => row.id !== id)].slice(0, MAX_NOTIFICATIONS);
+      });
+
+      void runTaskChatJob(id, { ...opts, message });
+    },
+    [runTaskChatJob]
+  );
+
   const runResearchJob = useCallback(
     async (id: string, opts: StartResearchChatOpts) => {
       abortById.current.get(id)?.abort();
@@ -936,6 +1115,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     );
   }, [notifications]);
 
+  const cancelTaskChatJob = useCallback((id: string) => {
+    const item = notifications.find((n) => n.id === id);
+    abortById.current.get(id)?.abort();
+    abortById.current.delete(id);
+    if (item?.feedbackId != null) taskChatInFlight.current.delete(item.feedbackId);
+    setNotifications((prev) =>
+      patchNotification(prev, id, {
+        status: "cancelled",
+        title: "Task chat cancelled",
+        body: "You stopped this reply.",
+        focused: false,
+        read: true,
+        streamingReply: "",
+      })
+    );
+  }, [notifications]);
+
   const cancelResearchJob = useCallback((id: string) => {
     const item = notifications.find((n) => n.id === id);
     abortById.current.get(id)?.abort();
@@ -1023,6 +1219,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const focusTaskChatJob = useCallback((id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.id === id
+          ? { ...n, focused: true, updatedAt: Date.now() }
+          : n.kind === "task_chat" && n.status === "running"
+            ? { ...n, focused: false }
+            : n
+      )
+    );
+  }, []);
+
   const focusResearchJob = useCallback((id: string) => {
     setNotifications((prev) =>
       prev.map((n) =>
@@ -1054,6 +1262,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (item?.kind === "writing_queue") writingInFlight.current = false;
       else if (item?.kind === "feed_discuss") {
         if (item.postId != null) discussInFlight.current.delete(item.postId);
+      } else if (item?.kind === "task_chat") {
+        if (item.feedbackId != null) taskChatInFlight.current.delete(item.feedbackId);
       } else if (item?.kind === "research_chat") {
         if (item.sessionId != null) researchInFlight.current.delete(item.sessionId);
       } else feedInFlight.current = false;
@@ -1097,6 +1307,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     notifications.find((n) => n.kind === "feed_discuss" && n.status === "running") ??
     null;
 
+  const focusedTaskChatJob =
+    notifications.find(
+      (n) =>
+        n.kind === "task_chat" &&
+        n.focused &&
+        (n.status === "running" || n.status === "error")
+    ) ?? null;
+
+  const runningTaskChatJob =
+    notifications.find((n) => n.kind === "task_chat" && n.status === "running") ??
+    null;
+
   const focusedResearchJob =
     notifications.find(
       (n) =>
@@ -1123,20 +1345,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       runningWritingJob,
       focusedDiscussJob,
       runningDiscussJob,
+      focusedTaskChatJob,
+      runningTaskChatJob,
       focusedResearchJob,
       runningResearchJob,
       feedRevision,
       writingRevision,
       discussRevision,
+      taskChatRevision,
       researchRevision,
       toast,
       startFeedRefresh,
       startWritingQueue,
       startFeedDiscuss,
+      startTaskChat,
       startResearchChat,
       cancelFeedJob,
       cancelWritingQueueJob,
       cancelDiscussJob,
+      cancelTaskChatJob,
       cancelResearchJob,
       retryFeedJob,
       retryWritingQueueJob,
@@ -1144,6 +1371,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       focusFeedJob,
       focusWritingQueueJob,
       focusDiscussJob,
+      focusTaskChatJob,
       focusResearchJob,
       markRead,
       markAllRead,
@@ -1159,20 +1387,25 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       runningWritingJob,
       focusedDiscussJob,
       runningDiscussJob,
+      focusedTaskChatJob,
+      runningTaskChatJob,
       focusedResearchJob,
       runningResearchJob,
       feedRevision,
       writingRevision,
       discussRevision,
+      taskChatRevision,
       researchRevision,
       toast,
       startFeedRefresh,
       startWritingQueue,
       startFeedDiscuss,
+      startTaskChat,
       startResearchChat,
       cancelFeedJob,
       cancelWritingQueueJob,
       cancelDiscussJob,
+      cancelTaskChatJob,
       cancelResearchJob,
       retryFeedJob,
       retryWritingQueueJob,
@@ -1180,6 +1413,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       focusFeedJob,
       focusWritingQueueJob,
       focusDiscussJob,
+      focusTaskChatJob,
       focusResearchJob,
       markRead,
       markAllRead,

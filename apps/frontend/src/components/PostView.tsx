@@ -17,11 +17,21 @@ interface Props {
   onChanged: () => void;
   onDeleted: () => void;
   onOpenSchedule?: (seed?: { name?: string; prompt?: string }) => void;
+  /** Open this task chat when arriving from a notification. */
+  initialChatTaskId?: number | null;
+  onConsumedInitialChatTask?: () => void;
 }
 
 type Mode = "editor" | "history";
 
-export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }: Props) {
+export default function PostView({
+  post,
+  onChanged,
+  onDeleted,
+  onOpenSchedule,
+  initialChatTaskId = null,
+  onConsumedInitialChatTask,
+}: Props) {
   const versions = post.versions; // newest first
   const latest: Version | undefined = versions[0];
 
@@ -40,6 +50,8 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
     focusedWritingJob,
     runningWritingJob,
     writingRevision,
+    focusedTaskChatJob,
+    taskChatRevision,
   } = useNotifications();
   const persistedDraft = useRef(loadEditorContent(post));
   const autosaveTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -74,6 +86,15 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
   }, [post.id]);
 
   useEffect(() => {
+    if (initialChatTaskId == null) return;
+    if (!post.feedback.some((f) => f.id === initialChatTaskId)) return;
+    setChatTaskId(initialChatTaskId);
+    setFocusedFeedbackId(initialChatTaskId);
+    setQueueOpen(false);
+    onConsumedInitialChatTask?.();
+  }, [initialChatTaskId, post.feedback, onConsumedInitialChatTask]);
+
+  useEffect(() => {
     if (
       focusedWritingJob?.postId === post.id &&
       (focusedWritingJob.status === "running" || focusedWritingJob.status === "error")
@@ -91,6 +112,33 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
     if (writingRevision === 0) return;
     onChanged();
   }, [writingRevision, onChanged]);
+
+  useEffect(() => {
+    if (taskChatRevision === 0) return;
+    onChanged();
+  }, [taskChatRevision, onChanged]);
+
+  useEffect(() => {
+    const job = focusedTaskChatJob;
+    const feedbackId = job?.feedbackId;
+    if (
+      !job ||
+      feedbackId == null ||
+      !post.feedback.some((f) => f.id === feedbackId)
+    ) {
+      return;
+    }
+    if (job.status === "running" || job.status === "error") {
+      setChatTaskId(feedbackId);
+      setFocusedFeedbackId(feedbackId);
+      setQueueOpen(false);
+    }
+  }, [
+    focusedTaskChatJob?.id,
+    focusedTaskChatJob?.feedbackId,
+    focusedTaskChatJob?.status,
+    post.feedback,
+  ]);
 
   // Adopt AI-written versions when the editor matches the last autosaved draft.
   useEffect(() => {
@@ -393,7 +441,9 @@ export default function PostView({ post, onChanged, onDeleted, onOpenSchedule }:
             <TaskChatPanel
               taskId={chatTask.id}
               feedback={chatTask}
-              refreshKey={writingRevision}
+              postId={post.id}
+              postTitle={post.title || "Untitled"}
+              refreshKey={writingRevision + taskChatRevision}
               onClose={() => setChatTaskId(null)}
               onMarkDone={markFeedbackDone}
               onCancel={removeFeedback}
