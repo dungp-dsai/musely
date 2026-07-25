@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Props {
   context: string;
@@ -8,15 +9,44 @@ interface Props {
   onClose: () => void;
 }
 
+const VIEW_PAD = 12;
+const POPUP_WIDTH = 300;
+
 /** Full task composer — only opened after an intentional action (chip / ⌘K). */
 export default function SelectionPopup({ context, x, y, onSubmit, onClose }: Props) {
   const [task, setTask] = useState("");
+  const [pos, setPos] = useState({ left: x, top: y });
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Keep the whole popup (including Queue button) inside the viewport.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const place = () => {
+      const { width, height } = el.getBoundingClientRect();
+      const maxLeft = Math.max(VIEW_PAD, window.innerWidth - width - VIEW_PAD);
+      const maxTop = Math.max(VIEW_PAD, window.innerHeight - height - VIEW_PAD);
+
+      let left = Math.min(Math.max(VIEW_PAD, x), maxLeft);
+      // Prefer below the selection; flip above when there isn't room.
+      let top = y;
+      if (top + height > window.innerHeight - VIEW_PAD) {
+        top = Math.min(y, window.innerHeight - VIEW_PAD) - height - 20;
+      }
+      top = Math.min(Math.max(VIEW_PAD, top), maxTop);
+      setPos({ left, top });
+    };
+
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [x, y, context]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -38,11 +68,12 @@ export default function SelectionPopup({ context, x, y, onSubmit, onClose }: Pro
     onSubmit(task.trim());
   };
 
-  const left = Math.min(Math.max(12, x), window.innerWidth - 320);
-  const top = Math.min(Math.max(12, y), window.innerHeight - 240);
-
-  return (
-    <div className="sel-popup" ref={ref} style={{ left, top }}>
+  return createPortal(
+    <div
+      className="sel-popup"
+      ref={ref}
+      style={{ left: pos.left, top: pos.top, width: POPUP_WIDTH }}
+    >
       <div className="sel-field">
         <span className="sel-label">Selected text</span>
         <div className="sel-context">“{context}”</div>
@@ -67,6 +98,7 @@ export default function SelectionPopup({ context, x, y, onSubmit, onClose }: Pro
       <button className="btn btn-primary full" onClick={submit} disabled={!task.trim()}>
         Queue for AI
       </button>
-    </div>
+    </div>,
+    document.body
   );
 }

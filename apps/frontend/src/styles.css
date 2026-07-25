@@ -763,6 +763,8 @@ button {
   position: fixed;
   z-index: 56;
   width: 300px;
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -772,6 +774,10 @@ button {
   flex-direction: column;
   gap: 10px;
   animation: sel-toolbar-in 0.16s ease-out;
+}
+
+.sel-popup .btn.full {
+  flex-shrink: 0;
 }
 
 .sel-field {

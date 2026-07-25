@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Props {
   x: number;
@@ -7,9 +8,34 @@ interface Props {
   onDismiss: () => void;
 }
 
+const VIEW_PAD = 12;
+
 /** Lightweight selection toolbar — does not steal focus from the editor. */
 export default function SelectionToolbar({ x, y, onAddTask, onDismiss }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const place = () => {
+      const { width, height } = el.getBoundingClientRect();
+      const maxLeft = Math.max(VIEW_PAD, window.innerWidth - width - VIEW_PAD);
+      const maxTop = Math.max(VIEW_PAD, window.innerHeight - height - VIEW_PAD);
+      let left = Math.min(Math.max(VIEW_PAD, x), maxLeft);
+      let top = y;
+      if (top + height > window.innerHeight - VIEW_PAD) {
+        top = Math.min(y, window.innerHeight - VIEW_PAD) - height - 8;
+      }
+      top = Math.min(Math.max(VIEW_PAD, top), maxTop);
+      setPos({ left, top });
+    };
+
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [x, y]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -27,14 +53,11 @@ export default function SelectionToolbar({ x, y, onAddTask, onDismiss }: Props) 
     };
   }, [onDismiss]);
 
-  const left = Math.min(Math.max(12, x), window.innerWidth - 200);
-  const top = Math.min(Math.max(12, y), window.innerHeight - 52);
-
-  return (
+  return createPortal(
     <div
       className="sel-toolbar"
       ref={ref}
-      style={{ left, top }}
+      style={{ left: pos.left, top: pos.top }}
       role="toolbar"
       aria-label="Selection actions"
       onMouseDown={(e) => e.preventDefault()}
@@ -48,6 +71,7 @@ export default function SelectionToolbar({ x, y, onAddTask, onDismiss }: Props) 
       <span className="sel-toolbar-hint" aria-hidden>
         ⌘K
       </span>
-    </div>
+    </div>,
+    document.body
   );
 }
