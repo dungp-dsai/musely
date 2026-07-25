@@ -46,6 +46,7 @@ export default function App() {
   const [cronSeed, setCronSeed] = useState<{ name?: string; prompt?: string } | null>(null);
   const [discussPostId, setDiscussPostId] = useState<number | null>(null);
   const [researchSessionId, setResearchSessionId] = useState<number | null>(null);
+  const [writeFeedbackId, setWriteFeedbackId] = useState<number | null>(null);
 
   const goToView = useCallback(
     (next: View) => {
@@ -58,12 +59,16 @@ export default function App() {
   );
 
   const openWriteFromNotification = useCallback(
-    (postId?: number) => {
+    (opts?: { postId?: number; feedbackId?: number }) => {
       goToView("write");
-      if (postId != null) setSelectedId(postId);
+      if (opts?.postId != null) setSelectedId(opts.postId);
+      if (opts?.feedbackId != null) setWriteFeedbackId(opts.feedbackId);
     },
     [goToView]
   );
+
+  const clearWriteFeedbackId = useCallback(() => setWriteFeedbackId(null), []);
+
 
   const openFeedFromNotification = useCallback(
     (opts?: { discussPostId?: number }) => {
@@ -325,6 +330,8 @@ export default function App() {
                   post={post}
                   onChanged={refreshPosts}
                   onDeleted={handleDeleted}
+                  initialChatTaskId={writeFeedbackId}
+                  onConsumedInitialChatTask={clearWriteFeedbackId}
                   onOpenSchedule={(seed) => {
                     setCronSeed(seed ?? null);
                     goToView("settings");

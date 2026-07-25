@@ -2,6 +2,7 @@ export type NotificationKind =
   | "feed_build"
   | "writing_queue"
   | "feed_discuss"
+  | "task_chat"
   | "research_chat";
 
 export type NotificationStatus = "running" | "done" | "error" | "cancelled";
@@ -32,12 +33,14 @@ export interface AppNotification {
   focused: boolean;
   activity: string[];
   topicLabel?: string;
-  /** Writing-queue / feed-discuss jobs. */
+  /** Writing-queue / feed-discuss / task-chat jobs. */
   postId?: number;
   postTitle?: string;
   taskCount?: number;
   /** Optional subset of feedback ids for a scoped queue run. */
   taskIds?: number[];
+  /** Task-chat: which feedback/task the reply belongs to. */
+  feedbackId?: number;
   /** Research chat session. */
   sessionId?: number;
   sessionTitle?: string;

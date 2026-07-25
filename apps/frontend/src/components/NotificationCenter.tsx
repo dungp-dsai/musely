@@ -7,7 +7,7 @@ import { relativeTime } from "../utils";
 
 type Props = {
   onOpenFeed?: (opts?: { discussPostId?: number }) => void;
-  onOpenWriting?: (postId?: number) => void;
+  onOpenWriting?: (opts?: { postId?: number; feedbackId?: number }) => void;
   onOpenResearch?: (opts?: { sessionId?: number }) => void;
 };
 
@@ -66,9 +66,11 @@ function NotificationRow({
   const activeLabel =
     item.kind === "feed_discuss" && item.status === "running"
       ? "Musely agent is typing…"
-      : item.kind === "research_chat" && item.status === "running"
-        ? item.activity[0] || "Researching…"
-        : timeline?.steps.find((s) => s.status === "active")?.label ?? null;
+      : item.kind === "task_chat" && item.status === "running"
+        ? "Musely agent is typing…"
+        : item.kind === "research_chat" && item.status === "running"
+          ? item.activity[0] || "Researching…"
+          : timeline?.steps.find((s) => s.status === "active")?.label ?? null;
 
   return (
     <div
@@ -114,12 +116,16 @@ function openNotificationDestination(
   item: AppNotification,
   opts: {
     onOpenFeed?: (opts?: { discussPostId?: number }) => void;
-    onOpenWriting?: (postId?: number) => void;
+    onOpenWriting?: (opts?: { postId?: number; feedbackId?: number }) => void;
     onOpenResearch?: (opts?: { sessionId?: number }) => void;
   }
 ) {
   if (item.kind === "writing_queue") {
-    opts.onOpenWriting?.(item.postId);
+    opts.onOpenWriting?.({ postId: item.postId });
+    return;
+  }
+  if (item.kind === "task_chat") {
+    opts.onOpenWriting?.({ postId: item.postId, feedbackId: item.feedbackId });
     return;
   }
   if (item.kind === "feed_discuss") {
@@ -146,6 +152,7 @@ export function NotificationToastHost({
     focusFeedJob,
     focusWritingQueueJob,
     focusDiscussJob,
+    focusTaskChatJob,
     focusResearchJob,
   } = useNotifications();
 
@@ -166,9 +173,15 @@ export function NotificationToastHost({
     }
     markRead(item.id);
     openNotificationDestination(item, { onOpenFeed, onOpenWriting, onOpenResearch });
-    if (item.status === "running" || item.status === "error" || item.kind === "feed_discuss") {
+    if (
+      item.status === "running" ||
+      item.status === "error" ||
+      item.kind === "feed_discuss" ||
+      item.kind === "task_chat"
+    ) {
       if (item.kind === "writing_queue") focusWritingQueueJob(item.id);
       else if (item.kind === "feed_discuss") focusDiscussJob(item.id);
+      else if (item.kind === "task_chat") focusTaskChatJob(item.id);
       else if (item.kind === "research_chat") focusResearchJob(item.id);
       else if (item.status === "running" || item.status === "error") focusFeedJob(item.id);
     }
@@ -217,10 +230,12 @@ export default function NotificationCenter({
     focusFeedJob,
     focusWritingQueueJob,
     focusDiscussJob,
+    focusTaskChatJob,
     focusResearchJob,
     cancelFeedJob,
     cancelWritingQueueJob,
     cancelDiscussJob,
+    cancelTaskChatJob,
     cancelResearchJob,
   } = useNotifications();
   const [open, setOpen] = useState(false);
@@ -249,6 +264,8 @@ export default function NotificationCenter({
       if (item.status === "running" || item.status === "error") focusWritingQueueJob(item.id);
     } else if (item.kind === "feed_discuss") {
       focusDiscussJob(item.id);
+    } else if (item.kind === "task_chat") {
+      focusTaskChatJob(item.id);
     } else if (item.kind === "research_chat") {
       focusResearchJob(item.id);
     } else if (item.status === "running" || item.status === "error") {
@@ -316,6 +333,8 @@ export default function NotificationCenter({
                         cancelWritingQueueJob(item.id);
                       } else if (item.kind === "feed_discuss") {
                         cancelDiscussJob(item.id);
+                      } else if (item.kind === "task_chat") {
+                        cancelTaskChatJob(item.id);
                       } else if (item.kind === "research_chat") {
                         cancelResearchJob(item.id);
                       } else {
